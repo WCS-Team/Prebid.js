@@ -52,6 +52,7 @@ export const spec = {
         exchange: {
           publisherId: publisherId,
           networkId: networkId,
+          standalone: validBidRequests[0].params.standalone
         }
       }
     };
@@ -96,6 +97,7 @@ export const spec = {
           creativeId: bid.crid,
           netRevenue: DEFAULT_NET_REVENUE,
           currency: DEFAULT_CURRENCY,
+          bidderName: bid.ext.bidderName,
         })
       })
     } else {
