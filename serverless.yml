@@ -1,0 +1,27 @@
+service: prebidjs-builder
+
+frameworkVersion: '2'
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+
+  stage: dev
+  region: us-east-1
+
+functions:
+  build:
+    handler: handler.build
+    description: Build prebid script based on provided modules.
+    events:
+      - http:
+          path: build
+          method: post
+
+plugins:
+  - serverless-plugin-include-dependencies
+
+# Plugin used to pack dev dependencies from package.json
+# These dependencies are needed to invoke gulpfile dynamically
+package:
+  excludeDevDependencies: false

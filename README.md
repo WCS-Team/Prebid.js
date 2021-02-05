@@ -20,6 +20,7 @@ Working examples can be found in [the developer docs](http://prebid.org/dev-docs
 - [Install](#Install)
 - [Build](#Build)
 - [Run](#Run)
+- [Deploy lambda](#DeployLambda)
 - [Contribute](#Contribute)
 
 <a name="Usage"></a>
@@ -183,6 +184,41 @@ Most likely your custom `prebid.js` will only change when there's:
 - A new release of `prebid.js`
 
 Having said that, you are probably safe to check your custom bundle into your project.  You can also generate it in your build process.
+
+<a name="DeployLambda"></a>
+
+## Deploy lambda
+
+To deploy lambda you will need serverless framework installed:
+
+    $ npm install -g serverless
+
+First install and build prebidjs locally:
+
+    $ npm install
+
+    $ gulp build
+
+Deploy lambda using following command:
+
+    $ sls deploy --aws-profile=<your_aws_profile>
+
+To verify prebid is building correctly check the POST endpoint from sls command output. For example:
+
+```shell
+api keys:
+None
+endpoints:
+POST - https://drafmdo9li.execute-api.us-east-1.amazonaws.com/dev/build
+functions:
+build: prebidjs-builder-dev-build
+```
+
+Test with curl
+
+    $ curl -X POST https://drafmdo9li.execute-api.us-east-1.amazonaws.com/dev/build -d '{ "modules": ["33acrossBidAdapter", "openxBidAdapter"] }' -H "Content-Type: application/json"
+
+You should see prebidjs content in response
 
 <a name="Run"></a>
 
