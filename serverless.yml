@@ -13,6 +13,7 @@ functions:
   build:
     handler: handler.build
     description: Build prebid script based on provided modules.
+    timeout: 60
     events:
       - http:
           path: build

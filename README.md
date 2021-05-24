@@ -14,6 +14,8 @@ This README is for developers who want to contribute to Prebid.js.
 Additional documentation can be found at [the Prebid homepage](http://prebid.org).
 Working examples can be found in [the developer docs](http://prebid.org/dev-docs/getting-started.html).
 
+Prebid.js is open source software that is offered for free as a convenience. While it is designed to help companies address legal requirements associated with header bidding, we cannot and do not warrant that your use of Prebid.js will satisfy legal requirements. You are solely responsible for ensuring that your use of Prebid.js complies with all applicable laws.  We strongly encourage you to obtain legal advice when using Prebid.js to ensure your implementation complies with all laws where you operate.
+
 **Table of Contents**
 
 - [Usage](#Usage)
@@ -141,7 +143,7 @@ This runs some code quality checks, starts a web server at `http://localhost:999
 
 ### Build Optimization
 
-The standard build output contains all the available modules from within the `modules` folder.
+The standard build output contains all the available modules from within the `modules` folder.  Note, however that there are bid adapters which support multiple bidders through aliases, so if you don't see a file in modules for a bid adapter, you may need to grep the repository to find the name of the module you need to include.
 
 You might want to exclude some/most of them from the final bundle.  To make sure the build only includes the modules you want, you can specify the modules to be included with the `--modules` CLI argument.
 
@@ -198,10 +200,24 @@ First install and build prebidjs locally:
     $ npm install
 
     $ gulp build
+### IMPORTANT
+Before deploying lambda make sure you're deploying to correct environment.
+Open your serverless.yml and configure stage you want to deploy
+
+    $ provider:
+        name: ..
+        runtime: ..
+        
+        stage: stage
+        
+        region: ..
+
+Possible values could be <b>stage</b> or <b>prod</b>
+You can also specify this by providing --stage or -s flag to deploy command (see below)
 
 Deploy lambda using following command:
 
-    $ sls deploy --aws-profile=<your_aws_profile>
+    $ sls deploy --aws-profile=<your_aws_profile> --stage=<optional-stage_is_default>
 
 To verify prebid is building correctly check the POST endpoint from sls command output. For example:
 
@@ -234,6 +250,11 @@ To run the unit tests:
 
 ```bash
 gulp test
+```
+
+To run the unit tests for a perticular file (example for pubmaticBidAdapter_spec.js):
+```bash
+gulp test --file "test/spec/modules/pubmaticBidAdapter_spec.js"
 ```
 
 To generate and view the code coverage reports:
@@ -302,7 +323,7 @@ As you make code changes, the bundles will be rebuilt and the page reloaded auto
 
 ## Contribute
 
-Many SSPs, bidders, and publishers have contributed to this project. [60+ Bidders](https://github.com/prebid/Prebid.js/tree/master/src/adapters) are supported by Prebid.js.
+Many SSPs, bidders, and publishers have contributed to this project. [Hundreds of bidders](https://github.com/prebid/Prebid.js/tree/master/src/adapters) are supported by Prebid.js.
 
 For guidelines, see [Contributing](./CONTRIBUTING.md).
 
@@ -310,9 +331,7 @@ Our PR review process can be found [here](https://github.com/prebid/Prebid.js/tr
 
 ### Add a Bidder Adapter
 
-To add a bidder adapter module, see the instructions in [How to add a bidder adaptor](http://prebid.org/dev-docs/bidder-adaptor.html).
-
-Please **do NOT load Prebid.js inside your adapter**. If you do this, we will reject or remove your adapter as appropriate.
+To add a bidder adapter module, see the instructions in [How to add a bidder adapter](https://docs.prebid.org/dev-docs/bidder-adaptor.html).
 
 ### Code Quality
 
