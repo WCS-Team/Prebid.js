@@ -200,10 +200,24 @@ First install and build prebidjs locally:
     $ npm install
 
     $ gulp build
+### IMPORTANT
+Before deploying lambda make sure you're deploying to correct environment.
+Open your serverless.yml and configure stage you want to deploy
+
+    $ provider:
+        name: ..
+        runtime: ..
+        
+        stage: stage
+        
+        region: ..
+
+Possible values could be <b>stage</b> or <b>prod</b>
+You can also specify this by providing --stage or -s flag to deploy command (see below)
 
 Deploy lambda using following command:
 
-    $ sls deploy --aws-profile=<your_aws_profile>
+    $ sls deploy --aws-profile=<your_aws_profile> --stage=<optional-stage_is_default>
 
 To verify prebid is building correctly check the POST endpoint from sls command output. For example:
 
