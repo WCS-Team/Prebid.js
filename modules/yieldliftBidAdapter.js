@@ -98,6 +98,9 @@ export const spec = {
           netRevenue: DEFAULT_NET_REVENUE,
           currency: DEFAULT_CURRENCY,
           bidderName: bid.ext.bidderName,
+          meta: {
+            adomain: bid.adomain
+          }
         })
       })
     } else {
