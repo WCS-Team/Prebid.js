@@ -28,8 +28,10 @@
     "uid2IdSystem",
     "admixerIdSystem",
     "dmdIdSystem",
+    "akamaiDAPId",
     "flocIdSystem",
-    "amxIdSystem"
+    "amxIdSystem",
+    "imuIdSystem"
   ],
   "adpod": [
     "freeWheelAdserverVideo",
@@ -42,6 +44,7 @@
     "haloRtdProvider",
     "iasRtdProvider",
     "jwplayerRtdProvider",
+    "medianetRtdProvider",
     "optimeraRtdProvider",
     "permutiveRtdProvider",
     "reconciliationRtdProvider",

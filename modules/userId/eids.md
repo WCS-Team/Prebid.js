@@ -183,11 +183,25 @@ userIdAsEids = [
         }]
     },
     {
+        source: 'akamai.com',
+        uids: [{
+            id: 'some-random-id-value',
+            atype: 1
+        }]
+    },
+    {
         source: 'deepintent.com',
         uids: [{
             id: 'some-random-id-value',
             atype: 3
         }]
+    }, 
+    {
+         source: 'kpuid.com',
+         uids: [{
+              id: 'some-random-id-value',
+              atype: 3
+         }]
     }
 ]
 ```
