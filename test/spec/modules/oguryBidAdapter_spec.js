@@ -229,7 +229,7 @@ describe('OguryBidAdapter', function () {
     const defaultTimeout = 1000;
     const expectedRequestObject = {
       id: bidRequests[0].auctionId,
-      at: 2,
+      at: 1,
       tmax: defaultTimeout,
       imp: [{
         id: bidRequests[0].bidId,
@@ -245,7 +245,6 @@ describe('OguryBidAdapter', function () {
       }, {
         id: bidRequests[1].bidId,
         tagid: bidRequests[1].params.adUnitId,
-        bidfloor: 0,
         banner: {
           format: [{
             w: 600,
@@ -271,7 +270,7 @@ describe('OguryBidAdapter', function () {
       },
       ext: {
         prebidversion: '$prebid.version$',
-        adapterversion: '1.2.7'
+        adapterversion: '1.2.11'
       }
     };
 
@@ -300,7 +299,59 @@ describe('OguryBidAdapter', function () {
         ...expectedRequestObject,
         regs: {
           ext: {
-            gdpr: 1
+            gdpr: 0
+          },
+        },
+        user: {
+          ext: {
+            consent: ''
+          },
+        }
+      };
+
+      const validBidRequests = bidRequests
+
+      const request = spec.buildRequests(validBidRequests, bidderRequestWithoutGdpr);
+      expect(request.data).to.deep.equal(expectedRequestObjectWithoutGdpr);
+      expect(request.data.regs.ext.gdpr).to.be.a('number');
+    });
+
+    it('should not add gdpr infos if gdprConsent is undefined', () => {
+      const bidderRequestWithoutGdpr = {
+        ...bidderRequest,
+        gdprConsent: undefined,
+      }
+      const expectedRequestObjectWithoutGdpr = {
+        ...expectedRequestObject,
+        regs: {
+          ext: {
+            gdpr: 0
+          },
+        },
+        user: {
+          ext: {
+            consent: ''
+          },
+        }
+      };
+
+      const validBidRequests = bidRequests
+
+      const request = spec.buildRequests(validBidRequests, bidderRequestWithoutGdpr);
+      expect(request.data).to.deep.equal(expectedRequestObjectWithoutGdpr);
+      expect(request.data.regs.ext.gdpr).to.be.a('number');
+    });
+
+    it('should not add tcString and turn off gdpr-applies if consentString and gdprApplies are undefined', () => {
+      const bidderRequestWithoutGdpr = {
+        ...bidderRequest,
+        gdprConsent: { consentString: undefined, gdprApplies: undefined },
+      }
+      const expectedRequestObjectWithoutGdpr = {
+        ...expectedRequestObject,
+        regs: {
+          ext: {
+            gdpr: 0
           },
         },
         user: {
@@ -349,7 +400,7 @@ describe('OguryBidAdapter', function () {
 
     it('should handle bidFloor when currency is not USD', () => {
       const expectedRequestWithUnsupportedFloorCurrency = utils.deepClone(expectedRequestObject)
-      expectedRequestWithUnsupportedFloorCurrency.imp[0].bidfloor = 0;
+      delete expectedRequestWithUnsupportedFloorCurrency.imp[0].bidfloor;
       let validBidRequests = utils.deepClone(bidRequests);
       validBidRequests[0] = {
         ...validBidRequests[0],
@@ -430,7 +481,7 @@ describe('OguryBidAdapter', function () {
           advertiserDomains: openRtbBidResponse.body.seatbid[0].bid[0].adomain
         },
         nurl: openRtbBidResponse.body.seatbid[0].bid[0].nurl,
-        adapterVersion: '1.2.7',
+        adapterVersion: '1.2.11',
         prebidVersion: '$prebid.version$'
       }, {
         requestId: openRtbBidResponse.body.seatbid[0].bid[1].impid,
@@ -447,7 +498,7 @@ describe('OguryBidAdapter', function () {
           advertiserDomains: openRtbBidResponse.body.seatbid[0].bid[1].adomain
         },
         nurl: openRtbBidResponse.body.seatbid[0].bid[1].nurl,
-        adapterVersion: '1.2.7',
+        adapterVersion: '1.2.11',
         prebidVersion: '$prebid.version$'
       }]
 
@@ -491,6 +542,11 @@ describe('OguryBidAdapter', function () {
 
     it('Should not create nurl request if bid does not contains nurl', function() {
       spec.onBidWon({})
+      expect(requests.length).to.equal(0);
+    })
+
+    it('Should not create nurl request if bid contains undefined nurl', function() {
+      spec.onBidWon({ nurl: undefined })
       expect(requests.length).to.equal(0);
     })
 
@@ -569,6 +625,7 @@ describe('OguryBidAdapter', function () {
       expect(requests.length).to.equal(1);
       expect(requests[0].url).to.equal(TIMEOUT_URL);
       expect(requests[0].method).to.equal('POST');
+      expect(JSON.parse(requests[0].requestBody).location).to.equal(window.location.href);
     })
   });
 });
