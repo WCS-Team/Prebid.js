@@ -52,11 +52,12 @@ export const spec = {
         exchange: {
           publisherId: publisherId,
           networkId: networkId,
-          standalone: validBidRequests[0].params.standalone
+          standalone: validBidRequests[0].params.standalone,
+          sessionId: validBidRequests[0].custom?.site?.sessionId
         }
       }
     };
-
+    console.log('Open RTB request', openrtbRequest, validBidRequests[0]);
     // adding schain object
     if (validBidRequests[0].schain) {
       deepSetValue(openrtbRequest, 'source.ext.schain', validBidRequests[0].schain);
