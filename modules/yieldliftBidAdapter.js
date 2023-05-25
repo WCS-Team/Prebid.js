@@ -44,9 +44,9 @@ export const spec = {
       id: bidderRequest.auctionId,
       imp: impressions,
       site: {
-        domain: validBidRequests[0].custom?.site?.domain || window.location.hostname,
-        page: window.location.href,
-        ref: bidderRequest.refererInfo ? bidderRequest.refererInfo.referer || null : null
+        domain: validBidRequests[0].custom?.site?.domain || bidderRequest.refererInfo?.domain,
+        page: bidderRequest.refererInfo?.page,
+        ref: bidderRequest.refererInfo?.referer
       },
       ext: {
         exchange: {
@@ -57,7 +57,7 @@ export const spec = {
         }
       }
     };
-    console.log('Open RTB request', openrtbRequest, validBidRequests[0]);
+    logInfo('Open RTB request', openrtbRequest, validBidRequests[0]);
     // adding schain object
     if (validBidRequests[0].schain) {
       deepSetValue(openrtbRequest, 'source.ext.schain', validBidRequests[0].schain);
@@ -72,6 +72,12 @@ export const spec = {
     // CCPA
     if (bidderRequest.uspConsent) {
       deepSetValue(openrtbRequest, 'regs.ext.us_privacy', bidderRequest.uspConsent);
+    }
+
+    // EIDS
+    const eids = deepAccess(validBidRequests[0], 'userIdAsEids');
+    if (Array.isArray(eids) && eids.length > 0) {
+      deepSetValue(openrtbRequest, 'user.ext.eids', eids);
     }
 
     const payloadString = JSON.stringify(openrtbRequest);
@@ -99,9 +105,7 @@ export const spec = {
           netRevenue: DEFAULT_NET_REVENUE,
           currency: DEFAULT_CURRENCY,
           bidderName: bid.ext.bidderName,
-          meta: {
-            adomain: bid.adomain
-          }
+          meta: { advertiserDomains: bid && bid.advertiserDomains ? bid.advertiserDomains : [] }
         })
       })
     } else {
