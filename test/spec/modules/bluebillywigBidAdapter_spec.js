@@ -1,10 +1,8 @@
-import { expect } from 'chai';
-import { spec } from 'modules/bluebillywigBidAdapter.js';
-import * as bidderFactory from 'src/adapters/bidderFactory.js';
-import { auctionManager } from 'src/auctionManager.js';
-import { deepClone, deepAccess } from 'src/utils.js';
-import { config } from 'src/config.js';
-import { VIDEO } from 'src/mediaTypes.js';
+import {expect} from 'chai';
+import {spec} from 'modules/bluebillywigBidAdapter.js';
+import {deepAccess, deepClone} from 'src/utils.js';
+import {config} from 'src/config.js';
+import {VIDEO} from 'src/mediaTypes.js';
 
 const BB_CONSTANTS = {
   BIDDER_CODE: 'bluebillywig',
@@ -210,6 +208,25 @@ describe('BlueBillywigAdapter', () => {
       bid.params.video = void (0);
       expect(spec.isBidRequestValid(bid)).to.equal(false);
     });
+
+    it('should fail if rendererSettings is specified but is not an object', () => {
+      const bid = deepClone(baseValidBid);
+
+      bid.params.rendererSettings = null;
+      expect(spec.isBidRequestValid(bid)).to.equal(false);
+
+      bid.params.rendererSettings = 'string';
+      expect(spec.isBidRequestValid(bid)).to.equal(false);
+
+      bid.params.rendererSettings = 123;
+      expect(spec.isBidRequestValid(bid)).to.equal(false);
+
+      bid.params.rendererSettings = false;
+      expect(spec.isBidRequestValid(bid)).to.equal(false);
+
+      bid.params.rendererSettings = void (0);
+      expect(spec.isBidRequestValid(bid)).to.equal(false);
+    });
   });
 
   describe('buildRequests', () => {
@@ -235,7 +252,11 @@ describe('BlueBillywigAdapter', () => {
     const baseValidBidRequests = [baseValidBid];
 
     const validBidderRequest = {
-      auctionId: '12abc345-67d8-9012-e345-6f78901a2b34',
+      ortb2: {
+        source: {
+          tid: '12abc345-67d8-9012-e345-6f78901a2b34',
+        }
+      },
       auctionStart: 1585918458868,
       bidderCode: BB_CONSTANTS.BIDDER_CODE,
       bidderRequestId: '1a2345b67c8d9e0',
@@ -274,9 +295,9 @@ describe('BlueBillywigAdapter', () => {
       const request = spec.buildRequests(baseValidBidRequests, validBidderRequest);
       const payload = JSON.parse(request.data);
 
-      expect(payload.id).to.equal(validBidderRequest.auctionId);
+      expect(payload.id).to.exist;
       expect(payload.source).to.be.an('object');
-      expect(payload.source.tid).to.equal(validBidderRequest.auctionId);
+      expect(payload.source.tid).to.equal(validBidderRequest.ortb2.source.tid);
       expect(payload.tmax).to.equal(BB_CONSTANTS.DEFAULT_TIMEOUT);
       expect(payload.imp).to.be.an('array');
       expect(payload.test).to.be.a('number');
@@ -420,7 +441,7 @@ describe('BlueBillywigAdapter', () => {
     it('should add referrerInfo as site when no app is set', () => {
       const newValidBidderRequest = deepClone(validBidderRequest);
 
-      newValidBidderRequest.refererInfo = { referer: 'https://www.bluebillywig.com' };
+      newValidBidderRequest.refererInfo = { page: 'https://www.bluebillywig.com' };
 
       const request = spec.buildRequests(baseValidBidRequests, newValidBidderRequest);
       const payload = JSON.parse(request.data);
@@ -516,10 +537,8 @@ describe('BlueBillywigAdapter', () => {
     });
 
     it('should set user ids when present', () => {
-      const userId = { tdid: 123 };
-
       const newBaseValidBidRequests = deepClone(baseValidBidRequests);
-      newBaseValidBidRequests[0].userId = { criteoId: 'sample-userid' };
+      newBaseValidBidRequests[0].userIdAsEids = [ {} ];
 
       const request = spec.buildRequests(newBaseValidBidRequests, validBidderRequest);
       const payload = JSON.parse(request.data);
@@ -740,6 +759,10 @@ describe('BlueBillywigAdapter', () => {
       expect(bid.creativeId).to.equal(serverResponse.body.seatbid[0].bid[0].crid);
       expect(bid.currency).to.equal(serverResponse.body.cur);
       expect(bid.ttl).to.equal(BB_CONSTANTS.DEFAULT_TTL);
+
+      expect(bid).to.have.property('meta');
+      expect(bid.meta).to.have.property('advertiserDomains');
+      expect(bid.meta.advertiserDomains[0]).to.equal('bluebillywig.com');
 
       expect(bid.publicationName).to.equal(validBidderRequest.bids[0].params.publicationName);
       expect(bid.rendererCode).to.equal(validBidderRequest.bids[0].params.rendererCode);

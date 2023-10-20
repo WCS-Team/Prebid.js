@@ -1,11 +1,16 @@
 import { expect } from 'chai';
 import { spec } from 'modules/ucfunnelBidAdapter.js';
 import {BANNER, VIDEO, NATIVE} from 'src/mediaTypes.js';
+import {deepClone} from '../../../src/utils.js';
 const URL = 'https://hb.aralego.com/header';
 const BIDDER_CODE = 'ucfunnel';
 
 const bidderRequest = {
-  uspConsent: '1YNN'
+  uspConsent: '1YNN',
+  refererInfo: {
+    domain: 'example.com',
+    page: 'http://example.com/index.html'
+  }
 };
 
 const userId = {
@@ -14,20 +19,25 @@ const userId = {
   'netId': 'fH5A3n2O8_CZZyPoJVD-eabc6ECb7jhxCicsds7qSg',
   'parrableId': {'eid': '01.1608624401.fe44bca9b96873084a0d4e9d0ac5729f13790ba8f8e58fa4707b6b3c096df91c6b5f254992bdad4ab1dd4a89919081e9b877d7a039ac3183709277665bac124f28e277d109f0ff965058'},
   'pubcid': 'd8aa10fa-d86c-451d-aad8-5f16162a9e64',
-  'sharedid': {'id': '01ESHXW4HD29KMF387T63JQ9H5', 'third': '01ESHXW4HD29KMF387T63JQ9H5'},
   'tdid': 'D6885E90-2A7A-4E0F-87CB-7734ED1B99A3',
-  'haloId': {}
+  'haloId': {},
+  'uid2': {'id': 'eb33b0cb-8d35-4722-b9c0-1a31d4064888'},
+  'connectid': '4567'
 }
 
 const validBannerBidReq = {
   bidder: BIDDER_CODE,
   params: {
-    adid: 'ad-34BBD2AA24B678BBFD4E7B9EE3B872D',
-    bidfloor: 1.0
+    adid: 'ad-34BBD2AA24B678BBFD4E7B9EE3B872D'
   },
   sizes: [[300, 250]],
   bidId: '263be71e91dd9d',
   auctionId: '9ad1fa8d-2297-4660-a018-b39945054746',
+  ortb2Imp: {
+    ext: {
+      gpid: '/1111/homepage#div-leftnav'
+    }
+  },
   userId: userId,
   'schain': {
     'ver': '1.0',
@@ -141,7 +151,10 @@ describe('ucfunnel Adapter', function () {
     });
   });
   describe('build request', function () {
-    const request = spec.buildRequests([validBannerBidReq], bidderRequest);
+    let request;
+    before(() => {
+      request = spec.buildRequests([validBannerBidReq], bidderRequest);
+    })
     it('should create a POST request for every bid', function () {
       expect(request[0].method).to.equal('GET');
       expect(request[0].url).to.equal(spec.ENDPOINT);
@@ -151,6 +164,11 @@ describe('ucfunnel Adapter', function () {
       expect(request[0].bidRequest).to.equal(validBannerBidReq);
     });
 
+    it('should set gpid if configured', function () {
+      const data = request[0].data;
+      expect(data.gpid).to.equal('/1111/homepage#div-leftnav');
+    });
+
     it('should attach request data', function () {
       const data = request[0].data;
       const [ width, height ] = validBannerBidReq.sizes[0];
@@ -158,24 +176,65 @@ describe('ucfunnel Adapter', function () {
       expect(data.adid).to.equal('ad-34BBD2AA24B678BBFD4E7B9EE3B872D');
       expect(data.w).to.equal(width);
       expect(data.h).to.equal(height);
+      expect(data.eids).to.equal('uid2,eb33b0cb-8d35-4722-b9c0-1a31d4064888!verizonMediaId,4567');
       expect(data.schain).to.equal('1.0,1!exchange1.com,1234,1,bid-request-1,publisher,publisher.com');
     });
 
     it('must parse bid size from a nested array', function () {
       const width = 640;
       const height = 480;
-      validBannerBidReq.sizes = [[ width, height ]];
-      const requests = spec.buildRequests([ validBannerBidReq ]);
+      const bid = deepClone(validBannerBidReq);
+      bid.sizes = [[ width, height ]];
+      const requests = spec.buildRequests([ bid ], bidderRequest);
       const data = requests[0].data;
       expect(data.w).to.equal(width);
       expect(data.h).to.equal(height);
+    });
+
+    it('should set bidfloor if configured', function() {
+      let bid = deepClone(validBannerBidReq);
+      bid.getFloor = function() {
+        return {
+          currency: 'USD',
+          floor: 2.02
+        }
+      };
+      const requests = spec.buildRequests([ bid ], bidderRequest);
+      const data = requests[0].data;
+      expect(data.fp).to.equal(2.02);
+    });
+
+    it('should set bidfloor if configured', function() {
+      let bid = deepClone(validBannerBidReq);
+      bid.params.bidfloor = 2.01;
+      const requests = spec.buildRequests([ bid ], bidderRequest);
+      const data = requests[0].data;
+      expect(data.fp).to.equal(2.01);
+    });
+
+    it('should set bidfloor if configured', function() {
+      let bid = deepClone(validBannerBidReq);
+      bid.getFloor = function() {
+        return {
+          currency: 'USD',
+          floor: 2.02
+        }
+      };
+      bid.params.bidfloor = 2.01;
+      const requests = spec.buildRequests([ bid ], bidderRequest);
+      const data = requests[0].data;
+      expect(data.fp).to.equal(2.01);
     });
   });
 
   describe('interpretResponse', function () {
     describe('should support banner', function () {
-      const request = spec.buildRequests([ validBannerBidReq ]);
-      const result = spec.interpretResponse({body: validBannerBidRes}, request[0]);
+      let request, result;
+      before(() => {
+        request = spec.buildRequests([ validBannerBidReq ], bidderRequest);
+        result = spec.interpretResponse({body: validBannerBidRes}, request[0]);
+      });
+
       it('should build bid array for banner', function () {
         expect(result.length).to.equal(1);
       });
@@ -193,8 +252,11 @@ describe('ucfunnel Adapter', function () {
     });
 
     describe('handle banner no ad', function () {
-      const request = spec.buildRequests([ validBannerBidReq ]);
-      const result = spec.interpretResponse({body: invalidBannerBidRes}, request[0]);
+      let request, result;
+      before(() => {
+        request = spec.buildRequests([ validBannerBidReq ], bidderRequest);
+        result = spec.interpretResponse({body: invalidBannerBidRes}, request[0]);
+      })
       it('should build bid array for banner', function () {
         expect(result.length).to.equal(1);
       });
@@ -211,8 +273,11 @@ describe('ucfunnel Adapter', function () {
     });
 
     describe('handle banner cpm under bidfloor', function () {
-      const request = spec.buildRequests([ validBannerBidReq ]);
-      const result = spec.interpretResponse({body: invalidBannerBidRes}, request[0]);
+      let request, result;
+      before(() => {
+        request = spec.buildRequests([ validBannerBidReq ], bidderRequest);
+        result = spec.interpretResponse({body: invalidBannerBidRes}, request[0]);
+      })
       it('should build bid array for banner', function () {
         expect(result.length).to.equal(1);
       });
@@ -229,8 +294,11 @@ describe('ucfunnel Adapter', function () {
     });
 
     describe('should support video', function () {
-      const request = spec.buildRequests([ validVideoBidReq ]);
-      const result = spec.interpretResponse({body: validVideoBidRes}, request[0]);
+      let request, result;
+      before(() => {
+        request = spec.buildRequests([ validVideoBidReq ], bidderRequest);
+        result = spec.interpretResponse({body: validVideoBidRes}, request[0]);
+      })
       it('should build bid array', function () {
         expect(result.length).to.equal(1);
       });
@@ -249,8 +317,11 @@ describe('ucfunnel Adapter', function () {
     });
 
     describe('should support native', function () {
-      const request = spec.buildRequests([ validNativeBidReq ]);
-      const result = spec.interpretResponse({body: validNativeBidRes}, request[0]);
+      let request, result;
+      before(() => {
+        request = spec.buildRequests([ validNativeBidReq ], bidderRequest);
+        result = spec.interpretResponse({body: validNativeBidRes}, request[0]);
+      })
       it('should build bid array', function () {
         expect(result.length).to.equal(1);
       });

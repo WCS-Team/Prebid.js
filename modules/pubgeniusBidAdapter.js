@@ -1,14 +1,14 @@
-import { registerBidder } from '../src/adapters/bidderFactory.js';
-import { ajax } from '../src/ajax.js';
-import { config } from '../src/config.js';
-import { BANNER, VIDEO } from '../src/mediaTypes.js';
+import {registerBidder} from '../src/adapters/bidderFactory.js';
+import {ajax} from '../src/ajax.js';
+import {config} from '../src/config.js';
+import {BANNER, VIDEO} from '../src/mediaTypes.js';
 import {
   deepAccess,
   deepSetValue,
   inIframe,
   isArrayOfNums,
+  isFn,
   isInteger,
-  isNumber,
   isStr,
   logError,
   parseQueryStringParameters,
@@ -16,7 +16,7 @@ import {
 } from '../src/utils.js';
 
 const BIDDER_VERSION = '1.1.0';
-const BASE_URL = 'https://ortb.adpearl.io';
+const BASE_URL = 'https://auction.adpearl.io';
 
 export const spec = {
   code: 'pubgenius',
@@ -41,7 +41,7 @@ export const spec = {
 
   buildRequests: function (bidRequests, bidderRequest) {
     const data = {
-      id: bidderRequest.auctionId,
+      id: bidderRequest.bidderRequestId,
       imp: bidRequests.map(buildImp),
       tmax: bidderRequest.timeout,
       ext: {
@@ -149,7 +149,22 @@ export const spec = {
 
 function buildVideoParams(videoMediaType, videoParams) {
   videoMediaType = videoMediaType || {};
-  const params = pick(videoMediaType, ['api', 'mimes', 'protocols', 'playbackmethod']);
+  const params = pick(videoMediaType, [
+    'mimes',
+    'minduration',
+    'maxduration',
+    'protocols',
+    'startdelay',
+    'placement',
+    'skip',
+    'skipafter',
+    'minbitrate',
+    'maxbitrate',
+    'delivery',
+    'playbackmethod',
+    'api',
+    'linearity',
+  ]);
 
   switch (videoMediaType.context) {
     case 'instream':
@@ -185,9 +200,16 @@ function buildImp(bid) {
     imp.video = buildVideoParams(bid.mediaTypes.video, bid.params.video);
   }
 
-  const bidFloor = bid.params.bidFloor;
-  if (isNumber(bidFloor)) {
-    imp.bidfloor = bidFloor;
+  if (isFn(bid.getFloor)) {
+    const { floor } = bid.getFloor({
+      mediaType: bid.mediaTypes.banner ? 'banner' : 'video',
+      size: '*',
+      currency: 'USD',
+    });
+
+    if (floor) {
+      imp.bidfloor = floor;
+    }
   }
 
   const pos = bid.params.position;
@@ -206,20 +228,15 @@ function buildSite(bidderRequest) {
   let site = null;
   const { refererInfo } = bidderRequest;
 
-  const pageUrl = config.getConfig('pageUrl') || refererInfo.canonicalUrl || refererInfo.referer;
+  const pageUrl = refererInfo.page;
   if (pageUrl) {
     site = site || {};
     site.page = pageUrl;
   }
 
-  if (refererInfo.reachedTop) {
-    try {
-      const pageRef = window.top.document.referrer;
-      if (pageRef) {
-        site = site || {};
-        site.ref = pageRef;
-      }
-    } catch (e) {}
+  if (refererInfo.ref) {
+    site = site || {};
+    site.ref = refererInfo.ref;
   }
 
   return site;

@@ -1,12 +1,20 @@
+import { logMessage, deepSetValue, deepAccess, _map, logWarn } from '../src/utils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
-import * as utils from '../src/utils.js';
-import {config} from '../src/config.js';
+import { config } from '../src/config.js';
+import { convertOrtbRequestToProprietaryNative } from '../src/native.js';
 
 const BIDDER_CODE = 'gothamads';
 const ACCOUNTID_MACROS = '[account_id]';
 const URL_ENDPOINT = `https://us-e-node1.gothamads.com/bid?pass=${ACCOUNTID_MACROS}&integration=prebidjs`;
-const NATIVE_ASSET_IDS = { 0: 'title', 2: 'icon', 3: 'image', 5: 'sponsoredBy', 4: 'body', 1: 'cta' };
+const NATIVE_ASSET_IDS = {
+  0: 'title',
+  2: 'icon',
+  3: 'image',
+  5: 'sponsoredBy',
+  4: 'body',
+  1: 'cta'
+};
 const NATIVE_PARAMS = {
   title: {
     id: 0,
@@ -61,18 +69,22 @@ export const spec = {
    * @return ServerRequest Info describing the request to the server.
    */
   buildRequests: (validBidRequests, bidderRequest) => {
+    // convert Native ORTB definition to old-style prebid native definition
+    validBidRequests = convertOrtbRequestToProprietaryNative(validBidRequests);
+
     if (validBidRequests && validBidRequests.length === 0) return []
     let accuontId = validBidRequests[0].params.accountId;
     const endpointURL = URL_ENDPOINT.replace(ACCOUNTID_MACROS, accuontId);
 
     let winTop = window;
     let location;
+    // TODO: this odd try-catch block was copied in several adapters; it doesn't seem to be correct for cross-origin
     try {
-      location = new URL(bidderRequest.refererInfo.referer)
+      location = new URL(bidderRequest.refererInfo.page)
       winTop = window.top;
     } catch (e) {
       location = winTop.location;
-      utils.logMessage(e);
+      logMessage(e);
     };
 
     let bids = [];
@@ -92,11 +104,25 @@ export const spec = {
           host: location.host
         },
         source: {
-          tid: bidRequest.transactionId
+          tid: bidderRequest?.ortb2?.source?.tid,
+        },
+        regs: {
+          coppa: config.getConfig('coppa') === true ? 1 : 0,
+          ext: {}
         },
         tmax: bidRequest.timeout,
         imp: [impObject],
       };
+
+      if (bidRequest.gdprConsent && bidRequest.gdprConsent.gdprApplies) {
+        deepSetValue(data, 'regs.ext.gdpr', bidRequest.gdprConsent.gdprApplies ? 1 : 0);
+        deepSetValue(data, 'user.ext.consent', bidRequest.gdprConsent.consentString);
+      }
+
+      if (bidRequest.uspConsent !== undefined) {
+        deepSetValue(data, 'regs.ext.us_privacy', bidRequest.uspConsent);
+      }
+
       bids.push(data)
     }
     return {
@@ -113,11 +139,11 @@ export const spec = {
    * @return {Bid[]} An array of bids which were nested inside the server.
    */
   interpretResponse: (serverResponse) => {
-    if (!serverResponse || !serverResponse.body) return []
-    let GothamAdskResponse = serverResponse.body;
+    if (!serverResponse || !serverResponse.body) return [];
+    let GothamAdsResponse = serverResponse.body;
 
     let bids = [];
-    for (let response of GothamAdskResponse) {
+    for (let response of GothamAdsResponse) {
       let mediaType = response.seatbid[0].bid[0].ext && response.seatbid[0].bid[0].ext.mediaType ? response.seatbid[0].bid[0].ext.mediaType : BANNER;
 
       let bid = {
@@ -133,16 +159,21 @@ export const spec = {
         mediaType: mediaType
       };
 
+      bid.meta = {};
+      if (response.seatbid[0].bid[0].adomain && response.seatbid[0].bid[0].adomain.length > 0) {
+        bid.meta.advertiserDomains = response.seatbid[0].bid[0].adomain;
+      }
+
       switch (mediaType) {
         case VIDEO:
-          bid.vastXml = response.seatbid[0].bid[0].adm
-          bid.vastUrl = response.seatbid[0].bid[0].ext.vastUrl
-          break
+          bid.vastXml = response.seatbid[0].bid[0].adm;
+          bid.vastUrl = response.seatbid[0].bid[0].ext.vastUrl;
+          break;
         case NATIVE:
-          bid.native = parseNative(response.seatbid[0].bid[0].adm)
-          break
+          bid.native = parseNative(response.seatbid[0].bid[0].adm);
+          break;
         default:
-          bid.ad = response.seatbid[0].bid[0].adm
+          bid.ad = response.seatbid[0].bid[0].adm;
       }
 
       bids.push(bid);
@@ -160,22 +191,31 @@ export const spec = {
  * @returns {boolean}
  */
 const checkRequestType = (bidRequest, type) => {
-  return (typeof utils.deepAccess(bidRequest, `mediaTypes.${type}`) !== 'undefined');
+  return (typeof deepAccess(bidRequest, `mediaTypes.${type}`) !== 'undefined');
 }
 
 const parseNative = admObject => {
-  const { assets, link, imptrackers, jstracker } = admObject.native;
+  const {
+    assets,
+    link,
+    imptrackers,
+    jstracker
+  } = admObject.native;
   const result = {
     clickUrl: link.url,
     clickTrackers: link.clicktrackers || undefined,
     impressionTrackers: imptrackers || undefined,
-    javascriptTrackers: jstracker ? [ jstracker ] : undefined
+    javascriptTrackers: jstracker ? [jstracker] : undefined
   };
   assets.forEach(asset => {
     const kind = NATIVE_ASSET_IDS[asset.id];
     const content = kind && asset[NATIVE_PARAMS[kind].name];
     if (content) {
-      result[kind] = content.text || content.value || { url: content.url, width: content.w, height: content.h };
+      result[kind] = content.text || content.value || {
+        url: content.url,
+        width: content.w,
+        height: content.h
+      };
     }
   });
 
@@ -184,7 +224,7 @@ const parseNative = admObject => {
 
 const prepareImpObject = (bidRequest) => {
   let impObject = {
-    id: bidRequest.transactionId,
+    id: bidRequest.bidId,
     secure: 1,
     ext: {
       placementId: bidRequest.params.placementId
@@ -207,11 +247,12 @@ const prepareImpObject = (bidRequest) => {
 
 const addNativeParameters = bidRequest => {
   let impObject = {
-    id: bidRequest.transactionId,
+    // TODO: this is not an "impObject", and `id` is not part of the ORTB native spec
+    id: bidRequest.bidId,
     ver: NATIVE_VERSION,
   };
 
-  const assets = utils._map(bidRequest.mediaTypes.native, (bidParams, key) => {
+  const assets = _map(bidRequest.mediaTypes.native, (bidParams, key) => {
     const props = NATIVE_PARAMS[key];
     const asset = {
       required: bidParams.required & 1,
@@ -233,7 +274,7 @@ const addNativeParameters = bidRequest => {
         hmin = sizes[1];
       }
 
-      asset[props.name] = {}
+      asset[props.name] = {};
 
       if (bidParams.len) asset[props.name]['len'] = bidParams.len;
       if (props.type) asset[props.name]['type'] = props.type;
@@ -265,7 +306,7 @@ const parseSizes = (bid, mediaType) => {
         mediaTypes.video.w,
         mediaTypes.video.h
       ];
-    } else if (Array.isArray(utils.deepAccess(bid, 'mediaTypes.video.playerSize')) && bid.mediaTypes.video.playerSize.length === 1) {
+    } else if (Array.isArray(deepAccess(bid, 'mediaTypes.video.playerSize')) && bid.mediaTypes.video.playerSize.length === 1) {
       size = bid.mediaTypes.video.playerSize[0];
     } else if (Array.isArray(bid.sizes) && bid.sizes.length > 0 && Array.isArray(bid.sizes[0]) && bid.sizes[0].length > 1) {
       size = bid.sizes[0];
@@ -278,7 +319,7 @@ const parseSizes = (bid, mediaType) => {
   } else if (Array.isArray(bid.sizes) && bid.sizes.length > 0) {
     sizes = bid.sizes
   } else {
-    utils.logWarn('no sizes are setup or found');
+    logWarn('no sizes are setup or found');
   }
 
   return sizes

@@ -5,6 +5,7 @@ import { config } from 'src/config.js';
 import { VIDEO } from 'src/mediaTypes.js';
 import { deepClone, parseQueryStringParameters } from 'src/utils.js';
 import { server } from 'test/mocks/xhr.js';
+import * as utils from 'src/utils.js';
 
 const {
   code,
@@ -173,9 +174,9 @@ describe('pubGENIUS adapter', () => {
 
       expectedRequest = {
         method: 'POST',
-        url: 'https://ortb.adpearl.io/prebid/auction',
+        url: 'https://auction.adpearl.io/prebid/auction',
         data: {
-          id: 'fake-auction-id',
+          id: 'fakebidderrequestid',
           imp: [
             {
               id: 'fakebidid',
@@ -225,8 +226,8 @@ describe('pubGENIUS adapter', () => {
       expect(buildRequests([bidRequest, bidRequest1], bidderRequest)).to.deep.equal(expectedRequest);
     });
 
-    it('should take bid floor in bidder params', () => {
-      bidRequest.params.bidFloor = 0.5;
+    it('should take bid floor from getFloor interface', () => {
+      bidRequest.getFloor = () => ({ floor: 0.5, currency: 'USD' });
       expectedRequest.data.imp[0].bidfloor = 0.5;
 
       expect(buildRequests([bidRequest], bidderRequest)).to.deep.equal(expectedRequest);
@@ -239,17 +240,8 @@ describe('pubGENIUS adapter', () => {
       expect(buildRequests([bidRequest], bidderRequest)).to.deep.equal(expectedRequest);
     });
 
-    it('should take pageUrl in config over referer in refererInfo', () => {
-      config.setConfig({ pageUrl: 'http://pageurl.org' });
-      bidderRequest.refererInfo.referer = 'http://referer.org';
-      expectedRequest.data.site = { page: 'http://pageurl.org' };
-
-      expect(buildRequests([bidRequest], bidderRequest)).to.deep.equal(expectedRequest);
-    });
-
-    it('should use canonical URL over referer in refererInfo', () => {
-      bidderRequest.refererInfo.canonicalUrl = 'http://pageurl.org';
-      bidderRequest.refererInfo.referer = 'http://referer.org';
+    it('should use page from refererInfo', () => {
+      bidderRequest.refererInfo.page = 'http://pageurl.org';
       expectedRequest.data.site = { page: 'http://pageurl.org' };
 
       expect(buildRequests([bidRequest], bidderRequest)).to.deep.equal(expectedRequest);
@@ -370,6 +362,8 @@ describe('pubGENIUS adapter', () => {
           protocols: [2, 3],
           api: [1, 2],
           playbackmethod: [3, 4],
+          maxduration: 10,
+          linearity: 1,
         },
       };
       bidRequest.params.video = {
@@ -394,6 +388,7 @@ describe('pubGENIUS adapter', () => {
         skipafter: 1,
         playbackmethod: [3, 4],
         api: [1, 2],
+        linearity: 1,
       };
 
       expect(buildRequests([bidRequest], bidderRequest)).to.deep.equal(expectedRequest);
@@ -490,7 +485,7 @@ describe('pubGENIUS adapter', () => {
       };
       expectedSync = {
         type: 'iframe',
-        url: 'https://ortb.adpearl.io/usersync/pixels.html?',
+        url: 'https://auction.adpearl.io/usersync/pixels.html?',
       };
     });
 
@@ -548,7 +543,7 @@ describe('pubGENIUS adapter', () => {
       onTimeout(timeoutData);
 
       expect(server.requests[0].method).to.equal('POST');
-      expect(server.requests[0].url).to.equal('https://ortb.adpearl.io/prebid/events?type=timeout');
+      expect(server.requests[0].url).to.equal('https://auction.adpearl.io/prebid/events?type=timeout');
       expect(JSON.parse(server.requests[0].requestBody)).to.deep.equal(timeoutData);
     });
   });

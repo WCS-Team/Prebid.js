@@ -9,9 +9,15 @@
  * This trickery helps integrate with ad servers, which set character limits on request params.
  */
 
-import { ajax } from './ajax.js';
-import { config } from './config.js';
-import * as utils from './utils.js';
+import {ajaxBuilder} from './ajax.js';
+import {config} from './config.js';
+import {auctionManager} from './auctionManager.js';
+
+/**
+ * Might be useful to be configurable in the future
+ * Depending on publisher needs
+ */
+const ttlBufferInSeconds = 15;
 
 /**
  * @typedef {object} CacheableUrlBid
@@ -58,23 +64,26 @@ function wrapURI(uri, impUrl) {
  * the bid can't be converted cleanly.
  *
  * @param {CacheableBid} bid
+ * @param index
  */
-function toStorageRequest(bid) {
+function toStorageRequest(bid, {index = auctionManager.index} = {}) {
   const vastValue = bid.vastXml ? bid.vastXml : wrapURI(bid.vastUrl, bid.vastImpUrl);
-
+  const auction = index.getAuction(bid);
+  const ttlWithBuffer = Number(bid.ttl) + ttlBufferInSeconds;
   let payload = {
     type: 'xml',
     value: vastValue,
-    ttlseconds: Number(bid.ttl)
+    ttlseconds: ttlWithBuffer
   };
 
   if (config.getConfig('cache.vasttrack')) {
     payload.bidder = bid.bidder;
     payload.bidid = bid.requestId;
-    // function has a thisArg set to bidderRequest for accessing the auctionStart
-    if (utils.isPlainObject(this) && this.hasOwnProperty('auctionStart')) {
-      payload.timestamp = this.auctionStart;
-    }
+    payload.aid = bid.auctionId;
+  }
+
+  if (auction != null) {
+    payload.timestamp = auction.getAuctionStart();
   }
 
   if (typeof bid.customCacheKey === 'string' && bid.customCacheKey !== '') {
@@ -131,14 +140,13 @@ function shimStorageCallback(done) {
  *
  * @param {CacheableBid[]} bids A list of bid objects which should be cached.
  * @param {videoCacheStoreCallback} [done] An optional callback which should be executed after
- * @param {BidderRequest} [bidderRequest]
  * the data has been stored in the cache.
  */
-export function store(bids, done, bidderRequest) {
+export function store(bids, done, getAjax = ajaxBuilder) {
   const requestData = {
-    puts: bids.map(toStorageRequest, bidderRequest)
+    puts: bids.map(toStorageRequest)
   };
-
+  const ajax = getAjax(config.getConfig('cache.timeout'));
   ajax(config.getConfig('cache.url'), shimStorageCallback(done), JSON.stringify(requestData), {
     contentType: 'text/plain',
     withCredentials: true

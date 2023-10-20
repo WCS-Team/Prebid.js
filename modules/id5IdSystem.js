@@ -5,12 +5,22 @@
  * @requires module:modules/userId
  */
 
-import * as utils from '../src/utils.js'
-import { ajax } from '../src/ajax.js';
-import { submodule } from '../src/hook.js';
-import { getRefererInfo } from '../src/refererDetection.js';
-import { getStorageManager } from '../src/storageManager.js';
-import { uspDataHandler } from '../src/adapterManager.js';
+import {
+  deepAccess,
+  deepSetValue,
+  isEmpty,
+  isEmptyStr,
+  logError,
+  logInfo,
+  logWarn,
+  safeJSONParse
+} from '../src/utils.js';
+import {ajax} from '../src/ajax.js';
+import {submodule} from '../src/hook.js';
+import {getRefererInfo} from '../src/refererDetection.js';
+import {getStorageManager} from '../src/storageManager.js';
+import {uspDataHandler} from '../src/adapterManager.js';
+import {MODULE_TYPE_UID} from '../src/activities/modules.js';
 
 const MODULE_NAME = 'id5Id';
 const GVLID = 131;
@@ -18,13 +28,14 @@ const NB_EXP_DAYS = 30;
 export const ID5_STORAGE_NAME = 'id5id';
 export const ID5_PRIVACY_STORAGE_NAME = `${ID5_STORAGE_NAME}_privacy`;
 const LOCAL_STORAGE = 'html5';
-const ABTEST_RESOLUTION = 10000;
+const LOG_PREFIX = 'User ID - ID5 submodule: ';
+const ID5_API_CONFIG_URL = 'https://id5-sync.com/api/config/prebid';
 
 // order the legacy cookie names in reverse priority order so the last
 // cookie in the array is the most preferred to use
-const LEGACY_COOKIE_NAMES = [ 'pbjs-id5id', 'id5id.1st' ];
+const LEGACY_COOKIE_NAMES = ['pbjs-id5id', 'id5id.1st', 'id5id'];
 
-const storage = getStorageManager(GVLID, MODULE_NAME);
+export const storage = getStorageManager({moduleType: MODULE_TYPE_UID, moduleName: MODULE_NAME});
 
 /** @type {Submodule} */
 export const id5IdSubmodule = {
@@ -49,42 +60,41 @@ export const id5IdSubmodule = {
    */
   decode(value, config) {
     let universalUid;
-    let linkType = 0;
+    let ext = {};
 
     if (value && typeof value.universal_uid === 'string') {
       universalUid = value.universal_uid;
-      linkType = value.link_type || linkType;
+      ext = value.ext || ext;
     } else {
       return undefined;
-    }
-
-    // check for A/B testing configuration and hide ID if in Control Group
-    const abConfig = getAbTestingConfig(config);
-    const controlGroup = isInControlGroup(universalUid, abConfig.controlGroupPct);
-    if (abConfig.enabled === true && typeof controlGroup === 'undefined') {
-      // A/B Testing is enabled, but configured improperly, so skip A/B testing
-      utils.logError('User ID - ID5 submodule: A/B Testing controlGroupPct must be a number >= 0 and <= 1! Skipping A/B Testing');
-    } else if (abConfig.enabled === true && controlGroup === true) {
-      // A/B Testing is enabled and user is in the Control Group, so do not share the ID5 ID
-      utils.logInfo('User ID - ID5 submodule: A/B Testing Enabled - user is in the Control Group, so the ID5 ID is NOT exposed');
-      universalUid = linkType = 0;
-    } else if (abConfig.enabled === true) {
-      // A/B Testing is enabled but user is not in the Control Group, so ID5 ID is shared
-      utils.logInfo('User ID - ID5 submodule: A/B Testing Enabled - user is NOT in the Control Group, so the ID5 ID is exposed');
     }
 
     let responseObj = {
       id5id: {
         uid: universalUid,
-        ext: {
-          linkType: linkType
-        }
+        ext: ext
       }
     };
 
-    if (abConfig.enabled === true) {
-      utils.deepSetValue(responseObj, 'id5id.ext.abTestingControlGroup', (typeof controlGroup === 'undefined' ? false : controlGroup));
+    const abTestingResult = deepAccess(value, 'ab_testing.result');
+    switch (abTestingResult) {
+      case 'control':
+        // A/B Testing is enabled and user is in the Control Group
+        logInfo(LOG_PREFIX + 'A/B Testing - user is in the Control Group: ID5 ID is NOT exposed');
+        deepSetValue(responseObj, 'id5id.ext.abTestingControlGroup', true);
+        break;
+      case 'error':
+        // A/B Testing is enabled, but configured improperly, so skip A/B testing
+        logError(LOG_PREFIX + 'A/B Testing ERROR! controlGroupPct must be a number >= 0 and <= 1');
+        break;
+      case 'normal':
+        // A/B Testing is enabled but user is not in the Control Group, so ID5 ID is shared
+        logInfo(LOG_PREFIX + 'A/B Testing - user is NOT in the Control Group');
+        deepSetValue(responseObj, 'id5id.ext.abTestingControlGroup', false);
+        break;
     }
+
+    logInfo(LOG_PREFIX + 'Decoded ID', responseObj);
 
     return responseObj;
   },
@@ -92,69 +102,30 @@ export const id5IdSubmodule = {
   /**
    * performs action to obtain id and return a value in the callback's response argument
    * @function getId
-   * @param {SubmoduleConfig} config
+   * @param {SubmoduleConfig} submoduleConfig
    * @param {ConsentData} consentData
    * @param {(Object|undefined)} cacheIdObj
    * @returns {IdResponse|undefined}
    */
-  getId(config, consentData, cacheIdObj) {
-    if (!hasRequiredConfig(config)) {
+  getId(submoduleConfig, consentData, cacheIdObj) {
+    if (!validateConfig(submoduleConfig)) {
       return undefined;
     }
 
-    const url = `https://id5-sync.com/g/v2/${config.params.partner}.json`;
-    const hasGdpr = (consentData && typeof consentData.gdprApplies === 'boolean' && consentData.gdprApplies) ? 1 : 0;
-    const referer = getRefererInfo();
-    const signature = (cacheIdObj && cacheIdObj.signature) ? cacheIdObj.signature : getLegacyCookieSignature();
-    const data = {
-      'gdpr': hasGdpr,
-      'gdpr_consent': hasGdpr ? consentData.consentString : '',
-      'partner': config.params.partner,
-      'nbPage': incrementNb(config.params.partner),
-      'o': 'pbjs',
-      'pd': config.params.pd || '',
-      'provider': config.params.provider || '',
-      'rf': referer.referer,
-      's': signature,
-      'top': referer.reachedTop ? 1 : 0,
-      'u': referer.stack[0] || window.location.href,
-      'us_privacy': uspDataHandler.getConsentData() || '',
-      'v': '$prebid.version$'
-    };
-
-    if (getAbTestingConfig(config).enabled === true) {
-      utils.deepSetValue(data, 'features.ab', 1);
+    if (!hasWriteConsentToLocalStorage(consentData)) {
+      logInfo(LOG_PREFIX + 'Skipping ID5 local storage write because no consent given.')
+      return undefined;
     }
 
-    const resp = function (callback) {
-      const callbacks = {
-        success: response => {
-          let responseObj;
-          if (response) {
-            try {
-              responseObj = JSON.parse(response);
-              resetNb(config.params.partner);
-              if (responseObj.privacy) {
-                storeInLocalStorage(ID5_PRIVACY_STORAGE_NAME, JSON.stringify(responseObj.privacy), NB_EXP_DAYS);
-              }
-
-              // TODO: remove after requiring publishers to use localstorage and
-              // all publishers have upgraded
-              if (config.storage.type === LOCAL_STORAGE) {
-                removeLegacyCookies(config.params.partner);
-              }
-            } catch (error) {
-              utils.logError(error);
-            }
-          }
-          callback(responseObj);
-        },
-        error: error => {
-          utils.logError(`User ID - ID5 submodule getId fetch encountered an error`, error);
-          callback();
-        }
-      };
-      ajax(url, callbacks, JSON.stringify(data), { method: 'POST', withCredentials: true });
+    const resp = function (cbFunction) {
+      new IdFetchFlow(submoduleConfig, consentData, cacheIdObj, uspDataHandler.getConsentData()).execute()
+        .then(response => {
+          cbFunction(response)
+        })
+        .catch(error => {
+          logError(LOG_PREFIX + 'getId fetch encountered an error', error);
+          cbFunction();
+        });
     };
     return {callback: resp};
   },
@@ -171,30 +142,201 @@ export const id5IdSubmodule = {
    * @return {(IdResponse|function(callback:function))} A response object that contains id and/or callback.
    */
   extendId(config, consentData, cacheIdObj) {
-    const partnerId = (config && config.params && config.params.partner) || 0;
+    if (!hasWriteConsentToLocalStorage(consentData)) {
+      logInfo(LOG_PREFIX + 'No consent given for ID5 local storage writing, skipping nb increment.')
+      return cacheIdObj;
+    }
+
+    const partnerId = validateConfig(config) ? config.params.partner : 0;
     incrementNb(partnerId);
+
+    logInfo(LOG_PREFIX + 'using cached ID', cacheIdObj);
     return cacheIdObj;
-  }
+  },
+  eids: {
+    'id5id': {
+      getValue: function(data) {
+        return data.uid
+      },
+      source: 'id5-sync.com',
+      atype: 1,
+      getUidExt: function(data) {
+        if (data.ext) {
+          return data.ext;
+        }
+      }
+    },
+  },
 };
 
-function hasRequiredConfig(config) {
-  if (!config || !config.params || !config.params.partner || typeof config.params.partner !== 'number') {
-    utils.logError(`User ID - ID5 submodule requires partner to be defined as a number`);
+class IdFetchFlow {
+  constructor(submoduleConfig, gdprConsentData, cacheIdObj, usPrivacyData) {
+    this.submoduleConfig = submoduleConfig
+    this.gdprConsentData = gdprConsentData
+    this.cacheIdObj = cacheIdObj
+    this.usPrivacyData = usPrivacyData
+  }
+
+  execute() {
+    return this.#callForConfig(this.submoduleConfig)
+      .then(fetchFlowConfig => {
+        return this.#callForExtensions(fetchFlowConfig.extensionsCall)
+          .then(extensionsData => {
+            return this.#callId5Fetch(fetchFlowConfig.fetchCall, extensionsData)
+          })
+      })
+      .then(fetchCallResponse => {
+        try {
+          resetNb(this.submoduleConfig.params.partner);
+          if (fetchCallResponse.privacy) {
+            storeInLocalStorage(ID5_PRIVACY_STORAGE_NAME, JSON.stringify(fetchCallResponse.privacy), NB_EXP_DAYS);
+          }
+        } catch (error) {
+          logError(LOG_PREFIX + error);
+        }
+        return fetchCallResponse;
+      })
+  }
+
+  #ajaxPromise(url, data, options) {
+    return new Promise((resolve, reject) => {
+      ajax(url,
+        {
+          success: function (res) {
+            resolve(res)
+          },
+          error: function (err) {
+            reject(err)
+          }
+        }, data, options)
+    })
+  }
+
+  // eslint-disable-next-line no-dupe-class-members
+  #callForConfig(submoduleConfig) {
+    let url = submoduleConfig.params.configUrl || ID5_API_CONFIG_URL; // override for debug/test purposes only
+    return this.#ajaxPromise(url, JSON.stringify(submoduleConfig), {method: 'POST'})
+      .then(response => {
+        let responseObj = JSON.parse(response);
+        logInfo(LOG_PREFIX + 'config response received from the server', responseObj);
+        return responseObj;
+      });
+  }
+
+  // eslint-disable-next-line no-dupe-class-members
+  #callForExtensions(extensionsCallConfig) {
+    if (extensionsCallConfig === undefined) {
+      return Promise.resolve(undefined)
+    }
+    let extensionsUrl = extensionsCallConfig.url
+    let method = extensionsCallConfig.method || 'GET'
+    let data = method === 'GET' ? undefined : JSON.stringify(extensionsCallConfig.body || {})
+    return this.#ajaxPromise(extensionsUrl, data, {'method': method})
+      .then(response => {
+        let responseObj = JSON.parse(response);
+        logInfo(LOG_PREFIX + 'extensions response received from the server', responseObj);
+        return responseObj;
+      })
+  }
+
+  // eslint-disable-next-line no-dupe-class-members
+  #callId5Fetch(fetchCallConfig, extensionsData) {
+    let url = fetchCallConfig.url;
+    let additionalData = fetchCallConfig.overrides || {};
+    let data = {
+      ...this.#createFetchRequestData(),
+      ...additionalData,
+      extensions: extensionsData
+    };
+    return this.#ajaxPromise(url, JSON.stringify(data), {method: 'POST', withCredentials: true})
+      .then(response => {
+        let responseObj = JSON.parse(response);
+        logInfo(LOG_PREFIX + 'fetch response received from the server', responseObj);
+        return responseObj;
+      });
+  }
+
+  // eslint-disable-next-line no-dupe-class-members
+  #createFetchRequestData() {
+    const params = this.submoduleConfig.params;
+    const hasGdpr = (this.gdprConsentData && typeof this.gdprConsentData.gdprApplies === 'boolean' && this.gdprConsentData.gdprApplies) ? 1 : 0;
+    const referer = getRefererInfo();
+    const signature = (this.cacheIdObj && this.cacheIdObj.signature) ? this.cacheIdObj.signature : getLegacyCookieSignature();
+    const nbPage = incrementNb(params.partner);
+    const data = {
+      'partner': params.partner,
+      'gdpr': hasGdpr,
+      'nbPage': nbPage,
+      'o': 'pbjs',
+      'tml': referer.topmostLocation,
+      'ref': referer.ref,
+      'cu': referer.canonicalUrl,
+      'top': referer.reachedTop ? 1 : 0,
+      'u': referer.stack[0] || window.location.href,
+      'v': '$prebid.version$',
+      'storage': this.submoduleConfig.storage,
+      'localStorage': storage.localStorageIsEnabled() ? 1 : 0
+    };
+
+    // pass in optional data, but only if populated
+    if (hasGdpr && this.gdprConsentData.consentString !== undefined && !isEmpty(this.gdprConsentData.consentString) && !isEmptyStr(this.gdprConsentData.consentString)) {
+      data.gdpr_consent = this.gdprConsentData.consentString;
+    }
+    if (this.usPrivacyData !== undefined && !isEmpty(this.usPrivacyData) && !isEmptyStr(this.usPrivacyData)) {
+      data.us_privacy = this.usPrivacyData;
+    }
+    if (signature !== undefined && !isEmptyStr(signature)) {
+      data.s = signature;
+    }
+    if (params.pd !== undefined && !isEmptyStr(params.pd)) {
+      data.pd = params.pd;
+    }
+    if (params.provider !== undefined && !isEmptyStr(params.provider)) {
+      data.provider = params.provider;
+    }
+    const abTestingConfig = params.abTesting || {enabled: false};
+
+    if (abTestingConfig.enabled) {
+      data.ab_testing = {
+        enabled: true, control_group_pct: abTestingConfig.controlGroupPct // The server validates
+      };
+    }
+    return data;
+  }
+}
+
+function validateConfig(config) {
+  if (!config || !config.params || !config.params.partner) {
+    logError(LOG_PREFIX + 'partner required to be defined');
+    return false;
+  }
+
+  const partner = config.params.partner
+  if (typeof partner === 'string' || partner instanceof String) {
+    let parsedPartnerId = parseInt(partner);
+    if (isNaN(parsedPartnerId) || parsedPartnerId < 0) {
+      logError(LOG_PREFIX + 'partner required to be a number or a String parsable to a positive integer');
+      return false;
+    } else {
+      config.params.partner = parsedPartnerId;
+    }
+  } else if (typeof partner !== 'number') {
+    logError(LOG_PREFIX + 'partner required to be a number or a String parsable to a positive integer');
     return false;
   }
 
   if (!config.storage || !config.storage.type || !config.storage.name) {
-    utils.logError(`User ID - ID5 submodule requires storage to be set`);
+    logError(LOG_PREFIX + 'storage required to be set');
     return false;
   }
 
-  // TODO: in a future release, return false if storage type or name are not set as required
+  // in a future release, we may return false if storage type or name are not set as required
   if (config.storage.type !== LOCAL_STORAGE) {
-    utils.logWarn(`User ID - ID5 submodule recommends storage type to be '${LOCAL_STORAGE}'. In a future release this will become a strict requirement`);
+    logWarn(LOG_PREFIX + `storage type recommended to be '${LOCAL_STORAGE}'. In a future release this may become a strict requirement`);
   }
-  // TODO: in a future release, return false if storage type or name are not set as required
+  // in a future release, we may return false if storage type or name are not set as required
   if (config.storage.name !== ID5_STORAGE_NAME) {
-    utils.logWarn(`User ID - ID5 submodule recommends storage name to be '${ID5_STORAGE_NAME}'. In a future release this will become a strict requirement`);
+    logWarn(LOG_PREFIX + `storage name recommended to be '${ID5_STORAGE_NAME}'. In a future release this may become a strict requirement`);
   }
 
   return true;
@@ -207,44 +349,34 @@ export function expDaysStr(expDays) {
 export function nbCacheName(partnerId) {
   return `${ID5_STORAGE_NAME}_${partnerId}_nb`;
 }
+
 export function storeNbInCache(partnerId, nb) {
   storeInLocalStorage(nbCacheName(partnerId), nb, NB_EXP_DAYS);
 }
+
 export function getNbFromCache(partnerId) {
   let cacheNb = getFromLocalStorage(nbCacheName(partnerId));
   return (cacheNb) ? parseInt(cacheNb) : 0;
 }
+
 function incrementNb(partnerId) {
   const nb = (getNbFromCache(partnerId) + 1);
   storeNbInCache(partnerId, nb);
   return nb;
 }
+
 function resetNb(partnerId) {
   storeNbInCache(partnerId, 0);
 }
 
 function getLegacyCookieSignature() {
   let legacyStoredValue;
-  LEGACY_COOKIE_NAMES.forEach(function(cookie) {
+  LEGACY_COOKIE_NAMES.forEach(function (cookie) {
     if (storage.getCookie(cookie)) {
-      legacyStoredValue = JSON.parse(storage.getCookie(cookie)) || legacyStoredValue;
+      legacyStoredValue = safeJSONParse(storage.getCookie(cookie)) || legacyStoredValue;
     }
   });
   return (legacyStoredValue && legacyStoredValue.signature) || '';
-}
-
-/**
- * Remove our legacy cookie values. Needed until we move all publishers
- * to html5 storage in a future release
- * @param {integer} partnerId
- */
-function removeLegacyCookies(partnerId) {
-  LEGACY_COOKIE_NAMES.forEach(function(cookie) {
-    storage.setCookie(`${cookie}`, '', expDaysStr(-1));
-    storage.setCookie(`${cookie}_nb`, '', expDaysStr(-1));
-    storage.setCookie(`${cookie}_${partnerId}_nb`, '', expDaysStr(-1));
-    storage.setCookie(`${cookie}_last`, '', expDaysStr(-1));
-  });
 }
 
 /**
@@ -267,6 +399,7 @@ export function getFromLocalStorage(key) {
   storage.removeDataFromLocalStorage(key);
   return null;
 }
+
 /**
  * Ensure that we always set an expiration in local storage since
  * by default it's not required
@@ -280,40 +413,18 @@ export function storeInLocalStorage(key, value, expDays) {
 }
 
 /**
- * gets the existing abTesting config or generates a default config with abTesting off
- *
- * @param {SubmoduleConfig|undefined} config
- * @returns {(Object|undefined)}
- */
-function getAbTestingConfig(config) {
-  return (config && config.params && config.params.abTesting) || { enabled: false };
-}
-
-/**
- * Return a consistant random number between 0 and ABTEST_RESOLUTION-1 for this user
- * Falls back to plain random if no user provided
- * @param {string} userId
- * @returns {number}
- */
-function abTestBucket(userId) {
-  if (userId) {
-    return ((utils.cyrb53Hash(userId) % ABTEST_RESOLUTION) + ABTEST_RESOLUTION) % ABTEST_RESOLUTION;
-  } else {
-    return Math.floor(Math.random() * ABTEST_RESOLUTION);
-  }
-}
-
-/**
- * Return a consistant boolean if this user is within the control group ratio provided
- * @param {string} userId
- * @param {number} controlGroupPct - Ratio [0,1] of users expected to be in the control group
+ * Check to see if we can write to local storage based on purpose consent 1, and that we have vendor consent (ID5=131)
+ * @param {ConsentData} consentData
  * @returns {boolean}
  */
-export function isInControlGroup(userId, controlGroupPct) {
-  if (!utils.isNumber(controlGroupPct) || controlGroupPct < 0 || controlGroupPct > 1) {
-    return undefined;
+function hasWriteConsentToLocalStorage(consentData) {
+  const hasGdpr = consentData && typeof consentData.gdprApplies === 'boolean' && consentData.gdprApplies;
+  const localstorageConsent = deepAccess(consentData, `vendorData.purpose.consents.1`)
+  const id5VendorConsent = deepAccess(consentData, `vendorData.vendor.consents.${GVLID.toString()}`)
+  if (hasGdpr && (!localstorageConsent || !id5VendorConsent)) {
+    return false;
   }
-  return abTestBucket(userId) < controlGroupPct * ABTEST_RESOLUTION;
+  return true;
 }
 
 submodule('userId', id5IdSubmodule);

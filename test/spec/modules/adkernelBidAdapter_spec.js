@@ -1,8 +1,9 @@
 import {expect} from 'chai';
-import {spec} from 'modules/adkernelBidAdapter.js';
-import * as utils from 'src/utils.js';
+import {spec} from 'modules/adkernelBidAdapter';
+import * as utils from 'src/utils';
 import {NATIVE, BANNER, VIDEO} from 'src/mediaTypes';
-import {config} from 'src/config.js';
+import {config} from 'src/config';
+import {parseDomain} from '../../../src/refererDetection.js';
 
 describe('Adkernel adapter', function () {
   const bid1_zone1 = {
@@ -14,8 +15,13 @@ describe('Adkernel adapter', function () {
       auctionId: 'auc-001',
       mediaTypes: {
         banner: {
-          sizes: [[300, 250], [300, 200]]
+          sizes: [[300, 250], [300, 200]],
+          pos: 1
         }
+      },
+      ortb2Imp: {
+        battr: [6, 7, 9],
+        pos: 2
       }
     }, bid2_zone2 = {
       bidder: 'adkernel',
@@ -28,7 +34,15 @@ describe('Adkernel adapter', function () {
         banner: {
           sizes: [[728, 90]]
         }
-      }
+      },
+      userIdAsEids: [
+        {
+          source: 'crwdcntrl.net',
+          uids: [
+            {atype: 1, id: '97d09fbba28542b7acbb6317c9534945a702b74c5993c352f332cfe83f40cdd9'}
+          ]
+        }
+      ]
     }, bid3_host2 = {
       bidder: 'adkernel',
       params: {zoneId: 1, host: 'rtb-private.adkernel.com'},
@@ -86,12 +100,16 @@ describe('Adkernel adapter', function () {
       params: {
         zoneId: 1,
         host: 'rtb.adkernel.com',
-        video: {api: [1, 2]}
       },
       mediaTypes: {
         video: {
           context: 'instream',
-          playerSize: [[640, 480]]
+          playerSize: [[640, 480]],
+          api: [1, 2],
+          placement: 1,
+          plcmt: 1,
+          skip: 1,
+          pos: 1
         }
       },
       adUnitCode: 'ad-unit-1'
@@ -241,15 +259,17 @@ describe('Adkernel adapter', function () {
 
   afterEach(function () {
     sandbox.restore();
+    config.resetConfig();
   });
 
   function buildBidderRequest(url = 'https://example.com/index.html', params = {}) {
-    return Object.assign({}, params, {refererInfo: {referer: url, reachedTop: true}, timeout: 3000, bidderCode: 'adkernel'});
+    return Object.assign({}, params, {refererInfo: {page: url, domain: parseDomain(url), reachedTop: true}, timeout: 3000, bidderCode: 'adkernel'});
   }
   const DEFAULT_BIDDER_REQUEST = buildBidderRequest();
 
   function buildRequest(bidRequests, bidderRequest = DEFAULT_BIDDER_REQUEST, dnt = true) {
     let dntmock = sandbox.stub(utils, 'getDNT').callsFake(() => dnt);
+    bidderRequest.bids = bidRequests;
     let pbRequests = spec.buildRequests(bidRequests, bidderRequest);
     dntmock.restore();
     let rtbRequests = pbRequests.map(r => JSON.parse(r.data));
@@ -282,6 +302,7 @@ describe('Adkernel adapter', function () {
 
   describe('banner request building', function () {
     let bidRequest, bidRequests, _;
+
     before(function () {
       [_, bidRequests] = buildRequest([bid1_zone1]);
       bidRequest = bidRequests[0];
@@ -326,6 +347,16 @@ describe('Adkernel adapter', function () {
       expect(bidRequest.device).to.have.property('dnt', 1);
     });
 
+    it('should copy FPD to imp.banner', function() {
+      expect(bidRequest.imp[0].banner).to.have.property('battr');
+      expect(bidRequest.imp[0].banner.battr).to.be.eql([6, 7, 9]);
+    });
+
+    it('should respect mediatypes attributes over FPD', function() {
+      expect(bidRequest.imp[0].banner).to.have.property('pos');
+      expect(bidRequest.imp[0].banner.pos).to.be.eql(1);
+    });
+
     it('shouldn\'t contain gdpr nor ccpa information for default request', function () {
       let [_, bidRequests] = buildRequest([bid1_zone1]);
       expect(bidRequests[0]).to.not.have.property('regs');
@@ -334,13 +365,26 @@ describe('Adkernel adapter', function () {
 
     it('should contain gdpr-related information if consent is configured', function () {
       let [_, bidRequests] = buildRequest([bid1_zone1],
-        buildBidderRequest('https://example.com/index.html',
-          {gdprConsent: {gdprApplies: true, consentString: 'test-consent-string', vendorData: {}}, uspConsent: '1YNN'}));
+        buildBidderRequest('https://example.com/index.html', {
+          gdprConsent: {gdprApplies: true, consentString: 'test-consent-string', vendorData: {}},
+          uspConsent: '1YNN',
+          gppConsent: {gppString: 'DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA', applicableSections: [2]}}
+        ));
       let bidRequest = bidRequests[0];
       expect(bidRequest).to.have.property('regs');
       expect(bidRequest.regs.ext).to.be.eql({'gdpr': 1, 'us_privacy': '1YNN'});
+      expect(bidRequest.regs.gpp).to.be.eql('DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA');
+      expect(bidRequest.regs.gpp_sid).to.be.eql([2]);
       expect(bidRequest).to.have.property('user');
       expect(bidRequest.user.ext).to.be.eql({'consent': 'test-consent-string'});
+    });
+
+    it('should contain coppa if configured', function () {
+      config.setConfig({coppa: true});
+      let [_, bidRequests] = buildRequest([bid1_zone1]);
+      let bidRequest = bidRequests[0];
+      expect(bidRequest).to.have.property('regs');
+      expect(bidRequest.regs).to.have.property('coppa', 1);
     });
 
     it('should\'t contain consent string if gdpr isn\'t applied', function () {
@@ -357,8 +401,31 @@ describe('Adkernel adapter', function () {
     });
 
     it('should forward default bidder timeout', function() {
-      let [_, bidRequests] = buildRequest([bid1_zone1], DEFAULT_BIDDER_REQUEST);
+      let [_, bidRequests] = buildRequest([bid1_zone1]);
       expect(bidRequests[0]).to.have.property('tmax', 3000);
+    });
+
+    it('should set bidfloor if configured', function() {
+      let bid = Object.assign({}, bid1_zone1);
+      bid.getFloor = function() {
+        return {
+          currency: 'USD',
+          floor: 0.145
+        }
+      };
+      let [_, bidRequests] = buildRequest([bid]);
+      expect(bidRequests[0].imp[0]).to.have.property('bidfloor', 0.145);
+    });
+
+    it('should forward user ids if available', function() {
+      let bid = Object.assign({}, bid2_zone2);
+      let [_, bidRequests] = buildRequest([bid]);
+      expect(bidRequests[0]).to.have.property('user');
+      expect(bidRequests[0].user).to.have.property('ext');
+      expect(bidRequests[0].user.ext).to.have.property('eids');
+      expect(bidRequests[0].user.ext.eids).to.be.an('array').that.is.not.empty;
+      expect(bidRequests[0].user.ext.eids[0]).to.have.property('source');
+      expect(bidRequests[0].user.ext.eids[0]).to.have.property('uids');
     });
   });
 
@@ -382,8 +449,13 @@ describe('Adkernel adapter', function () {
     });
 
     it('should have openrtb video impression parameters', function() {
-      expect(bidRequests[0].imp[0].video).to.have.property('api');
-      expect(bidRequests[0].imp[0].video.api).to.be.eql([1, 2]);
+      let video = bidRequests[0].imp[0].video;
+      expect(video).to.have.property('api');
+      expect(video.api).to.be.eql([1, 2]);
+      expect(video.placement).to.be.eql(1);
+      expect(video.plcmt).to.be.eql(1);
+      expect(video.skip).to.be.eql(1);
+      expect(video.pos).to.be.eql(1);
     });
   });
 
@@ -556,7 +628,7 @@ describe('Adkernel adapter', function () {
 
   describe('adapter configuration', () => {
     it('should have aliases', () => {
-      expect(spec.aliases).to.have.lengthOf(12);
+      expect(spec.aliases).to.be.an('array').that.is.not.empty;
     });
   });
 

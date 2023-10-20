@@ -1,8 +1,9 @@
+import {deepAccess, isStr} from '../src/utils.js';
 import {registerBidder} from '../src/adapters/bidderFactory.js';
 import {config} from '../src/config.js';
 import {BANNER, VIDEO} from '../src/mediaTypes.js';
-import * as utils from '../src/utils.js';
-import { Renderer } from '../src/Renderer.js';
+import {Renderer} from '../src/Renderer.js';
+import {getAllOrtbKeywords} from '../libraries/keywords/keywords.js';
 
 const BIDDER_CODE = 'richaudience';
 let REFERER = '';
@@ -31,11 +32,12 @@ export const spec = {
   buildRequests: function (validBidRequests, bidderRequest) {
     return validBidRequests.map(bid => {
       var payload = {
-        bidfloor: bid.params.bidfloor,
+        bidfloor: raiGetFloor(bid, config),
         ifa: bid.params.ifa,
         pid: bid.params.pid,
         supplyType: bid.params.supplyType,
         currencyCode: config.getConfig('currency.adServerCurrency'),
+        // TODO: fix auctionId leak: https://github.com/prebid/Prebid.js/issues/9781
         auctionId: bid.auctionId,
         bidId: bid.bidId,
         BidRequestsCount: bid.bidRequestsCount,
@@ -43,26 +45,34 @@ export const spec = {
         bidderRequestId: bid.bidderRequestId,
         tagId: bid.adUnitCode,
         sizes: raiGetSizes(bid),
-        referer: (typeof bidderRequest.refererInfo.referer != 'undefined' ? encodeURIComponent(bidderRequest.refererInfo.referer) : null),
+        // TODO: is 'page' the right value here?
+        referer: (typeof bidderRequest.refererInfo.page != 'undefined' ? encodeURIComponent(bidderRequest.refererInfo.page) : null),
         numIframes: (typeof bidderRequest.refererInfo.numIframes != 'undefined' ? bidderRequest.refererInfo.numIframes : null),
-        transactionId: bid.transactionId,
+        transactionId: bid.ortb2Imp?.ext?.tid,
         timeout: config.getConfig('bidderTimeout'),
         user: raiSetEids(bid),
         demand: raiGetDemandType(bid),
         videoData: raiGetVideoInfo(bid),
         scr_rsl: raiGetResolution(),
         cpuc: (typeof window.navigator != 'undefined' ? window.navigator.hardwareConcurrency : null),
-        kws: (!utils.isEmpty(bid.params.keywords) ? bid.params.keywords : null)
+        kws: getAllOrtbKeywords(bidderRequest.ortb2, bid.params.keywords).join(','),
+        schain: bid.schain,
+        gpid: raiSetPbAdSlot(bid)
       };
 
-      REFERER = (typeof bidderRequest.refererInfo.referer != 'undefined' ? encodeURIComponent(bidderRequest.refererInfo.referer) : null)
+      // TODO: is 'page' the right value here?
+      REFERER = (typeof bidderRequest.refererInfo.page != 'undefined' ? encodeURIComponent(bidderRequest.refererInfo.page) : null)
 
       payload.gdpr_consent = '';
-      payload.gdpr = null;
+      payload.gdpr = false;
 
       if (bidderRequest && bidderRequest.gdprConsent) {
-        payload.gdpr_consent = bidderRequest.gdprConsent.consentString;
-        payload.gdpr = bidderRequest.gdprConsent.gdprApplies;
+        if (typeof bidderRequest.gdprConsent.gdprApplies != 'undefined') {
+          payload.gdpr = bidderRequest.gdprConsent.gdprApplies;
+        }
+        if (typeof bidderRequest.gdprConsent.consentString != 'undefined') {
+          payload.gdpr_consent = bidderRequest.gdprConsent.consentString;
+        }
       }
 
       var payloadString = JSON.stringify(payload);
@@ -97,7 +107,8 @@ export const spec = {
         netRevenue: response.netRevenue,
         currency: response.currency,
         ttl: response.ttl,
-        dealId: response.dealId,
+        meta: response.adomain,
+        dealId: response.dealId
       };
 
       if (response.media_type === 'video') {
@@ -124,7 +135,7 @@ export const spec = {
 
       bidResponses.push(bidResponse);
     }
-    return bidResponses
+    return bidResponses;
   },
   /***
    * User Syncs
@@ -141,11 +152,15 @@ export const spec = {
     var syncUrl = '';
     var consent = '';
 
+    var raiSync = {};
+
+    raiSync = raiGetSyncInclude(config);
+
     if (gdprConsent && typeof gdprConsent.consentString === 'string' && typeof gdprConsent.consentString != 'undefined') {
       consent = `consentString=${gdprConsent.consentString}`
     }
 
-    if (syncOptions.iframeEnabled) {
+    if (syncOptions.iframeEnabled && raiSync.raiIframe != 'exclude') {
       syncUrl = 'https://sync.richaudience.com/dcf3528a0b8aa83634892d50e91c306e/?ord=' + rand
       if (consent != '') {
         syncUrl += `&${consent}`
@@ -156,7 +171,7 @@ export const spec = {
       });
     }
 
-    if (syncOptions.pixelEnabled && REFERER != null && syncs.length == 0) {
+    if (syncOptions.pixelEnabled && REFERER != null && syncs.length == 0 && raiSync.raiImage != 'exclude') {
       syncUrl = `https://sync.richaudience.com/bf7c142f4339da0278e83698a02b0854/?referrer=${REFERER}`;
       if (consent != '') {
         syncUrl += `&${consent}`
@@ -187,6 +202,13 @@ function raiGetSizes(bid) {
 
 function raiGetDemandType(bid) {
   let raiFormat = 'display';
+  if (typeof bid.sizes != 'undefined') {
+    bid.sizes.forEach(function (sz) {
+      if ((sz[0] == '1800' && sz[1] == '1000') || (sz[0] == '1' && sz[1] == '1')) {
+        raiFormat = 'skin'
+      }
+    })
+  }
   if (bid.mediaTypes != undefined) {
     if (bid.mediaTypes.video != undefined) {
       raiFormat = 'video';
@@ -215,19 +237,19 @@ function raiSetEids(bid) {
   let eids = [];
 
   if (bid && bid.userId) {
-    raiSetUserId(bid, eids, 'id5-sync.com', utils.deepAccess(bid, `userId.id5id.uid`));
-    raiSetUserId(bid, eids, 'pubcommon', utils.deepAccess(bid, `userId.pubcid`));
-    raiSetUserId(bid, eids, 'criteo.com', utils.deepAccess(bid, `userId.criteoId`));
-    raiSetUserId(bid, eids, 'liveramp.com', utils.deepAccess(bid, `userId.idl_env`));
-    raiSetUserId(bid, eids, 'liveintent.com', utils.deepAccess(bid, `userId.lipb.lipbid`));
-    raiSetUserId(bid, eids, 'adserver.org', utils.deepAccess(bid, `userId.tdid`));
+    raiSetUserId(bid, eids, 'id5-sync.com', deepAccess(bid, `userId.id5id.uid`));
+    raiSetUserId(bid, eids, 'pubcommon', deepAccess(bid, `userId.pubcid`));
+    raiSetUserId(bid, eids, 'criteo.com', deepAccess(bid, `userId.criteoId`));
+    raiSetUserId(bid, eids, 'liveramp.com', deepAccess(bid, `userId.idl_env`));
+    raiSetUserId(bid, eids, 'liveintent.com', deepAccess(bid, `userId.lipb.lipbid`));
+    raiSetUserId(bid, eids, 'adserver.org', deepAccess(bid, `userId.tdid`));
   }
 
   return eids;
 }
 
 function raiSetUserId(bid, eids, source, value) {
-  if (utils.isStr(value)) {
+  if (isStr(value)) {
     eids.push({
       userId: value,
       source: source
@@ -262,4 +284,51 @@ function raiGetResolution() {
     resolution = window.screen.width + 'x' + window.screen.height;
   }
   return resolution;
+}
+
+function raiSetPbAdSlot(bid) {
+  let pbAdSlot = '';
+  if (deepAccess(bid, 'ortb2Imp.ext.data.pbadslot') != null) {
+    pbAdSlot = deepAccess(bid, 'ortb2Imp.ext.data.pbadslot')
+  }
+  return pbAdSlot
+}
+
+function raiGetSyncInclude(config) {
+  try {
+    let raConfig = null;
+    let raiSync = {};
+    if (config.getConfig('userSync').filterSettings != null && typeof config.getConfig('userSync').filterSettings != 'undefined') {
+      raConfig = config.getConfig('userSync').filterSettings
+      if (raConfig.iframe != null && typeof raConfig.iframe != 'undefined') {
+        raiSync.raiIframe = raConfig.iframe.bidders == 'richaudience' || raConfig.iframe.bidders == '*' ? raConfig.iframe.filter : 'exclude';
+      }
+      if (raConfig.image != null && typeof raConfig.image != 'undefined') {
+        raiSync.raiImage = raConfig.image.bidders == 'richaudience' || raConfig.image.bidders == '*' ? raConfig.image.filter : 'exclude';
+      }
+    }
+    return raiSync;
+  } catch (e) {
+    return null;
+  }
+}
+
+function raiGetFloor(bid, config) {
+  try {
+    let raiFloor;
+    if (bid.params.bidfloor != null) {
+      raiFloor = bid.params.bidfloor;
+    } else if (typeof bid.getFloor == 'function') {
+      let floorSpec = bid.getFloor({
+        currency: config.getConfig('floors.data.currency') != null ? config.getConfig('floors.data.currency') : 'USD',
+        mediaType: typeof bid.mediaTypes['banner'] == 'object' ? 'banner' : 'video',
+        size: '*'
+      })
+
+      raiFloor = floorSpec.floor;
+    }
+    return raiFloor
+  } catch (e) {
+    return 0
+  }
 }

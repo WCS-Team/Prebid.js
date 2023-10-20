@@ -9,6 +9,7 @@ describe('jixie Adapter', function () {
   const device_ = 'desktop';
   const timeout_ = 1000;
   const currency_ = 'USD';
+  const keywords_ = '';
 
   /**
    * Basic
@@ -70,6 +71,17 @@ describe('jixie Adapter', function () {
 
     const clientIdTest1_ = '1aba6a40-f711-11e9-868c-53a2ae972xxx';
     const sessionIdTest1_ = '1594782644-1aba6a40-f711-11e9-868c-53a2ae972xxx';
+    const jxtokoTest1_ = 'eyJJRCI6ImFiYyJ9';
+    const jxifoTest1_ = 'fffffbbbbbcccccaaaaae890606aaaaa';
+    const jxtdidTest1_ = '222223d1-1111-2222-3333-b9f129299999';
+    const __uid2_advertising_token_Test1 = 'AAAAABBBBBCCCCCDDDDDEEEEEUkkZPQfifpkPnnlJhtsa4o+gf4nfqgN5qHiTVX73ymTSbLT9jz1nf+Q7QdxNh9nTad9UaN5pzfHMt/rs1woQw72c1ip+8heZXPfKGZtZP7ldJesYhlo3/0FVcL/wl9ZlAo1jYOEfHo7Y9zFzNXABbbbbb==';
+
+    const refJxEids_ = {
+      '_jxtoko': jxtokoTest1_,
+      '_jxifo': jxifoTest1_,
+      '_jxtdid': jxtdidTest1_,
+      '__uid2_advertising_token': __uid2_advertising_token_Test1
+    };
 
     // to serve as the object that prebid will call jixie buildRequest with: (param2)
     const bidderRequest_ = {
@@ -88,7 +100,12 @@ describe('jixie Adapter', function () {
         'adUnitCode': adUnitCode0_,
         'bidId': bidId0_,
         'bidderRequestId': bidderRequestId_,
-        'auctionId': auctionId_
+        'auctionId': auctionId_,
+        'ortb2Imp': {
+          'ext': {
+            'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-1'
+          }
+        }
       },
       {
         'bidder': 'jixie',
@@ -107,7 +124,12 @@ describe('jixie Adapter', function () {
         'adUnitCode': adUnitCode1_,
         'bidId': bidId1_,
         'bidderRequestId': bidderRequestId_,
-        'auctionId': auctionId_
+        'auctionId': auctionId_,
+        'ortb2Imp': {
+          'ext': {
+            'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-2'
+          }
+        }
       },
       {
         'bidder': 'jixie',
@@ -126,7 +148,12 @@ describe('jixie Adapter', function () {
         'adUnitCode': adUnitCode2_,
         'bidId': bidId2_,
         'bidderRequestId': bidderRequestId_,
-        'auctionId': auctionId_
+        'auctionId': auctionId_,
+        'ortb2Imp': {
+          'ext': {
+            'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-3'
+          }
+        }
       }
     ];
 
@@ -139,7 +166,8 @@ describe('jixie Adapter', function () {
         'sizes': [[300, 250], [300, 600]],
         'params': {
           'unit': 'prebidsampleunit'
-        }
+        },
+        'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-1'
       },
       {
         'bidId': bidId1_,
@@ -155,7 +183,8 @@ describe('jixie Adapter', function () {
         'sizes': [[300, 250]],
         'params': {
           'unit': 'prebidsampleunit'
-        }
+        },
+        'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-2'
       },
       {
         'bidId': bidId2_,
@@ -171,7 +200,8 @@ describe('jixie Adapter', function () {
         'sizes': [[300, 250], [300, 600]],
         'params': {
           'unit': 'prebidsampleunit'
-        }
+        },
+        'gpid': 'SUPERNEWS#DESKTOP#div-gpt-ad-Top_1-3'
       }
     ];
 
@@ -198,27 +228,40 @@ describe('jixie Adapter', function () {
       let getCookieStub = sinon.stub(storage, 'getCookie');
       let getLocalStorageStub = sinon.stub(storage, 'getDataFromLocalStorage');
       getCookieStub
-        .withArgs('_jx')
+        .withArgs('_jxtoko')
+        .returns(jxtokoTest1_);
+      getCookieStub
+        .withArgs('_jxifo')
+        .returns(jxifoTest1_);
+      getCookieStub
+        .withArgs('_jxtdid')
+        .returns(jxtdidTest1_);
+      getCookieStub
+        .withArgs('__uid2_advertising_token')
+        .returns(__uid2_advertising_token_Test1);
+      getCookieStub
+        .withArgs('_jxx')
         .returns(clientIdTest1_);
       getCookieStub
-        .withArgs('_jxs')
+        .withArgs('_jxxs')
         .returns(sessionIdTest1_);
       getLocalStorageStub
-        .withArgs('_jx')
+        .withArgs('_jxx')
         .returns(clientIdTest1_);
       getLocalStorageStub
-        .withArgs('_jxs')
+        .withArgs('_jxxs')
         .returns(sessionIdTest1_
         );
       let miscDimsStub = sinon.stub(jixieaux, 'getMiscDims');
       miscDimsStub
-        .returns({ device: device_, pageurl: pageurl_, domain: domain_ });
+        .returns({ device: device_, pageurl: pageurl_, domain: domain_, mkeywords: keywords_ });
 
       // actual api call:
       const request = spec.buildRequests(bidRequests_, bidderRequest_);
       it('sends bid request to ENDPOINT via POST', function () {
         expect(request.method).to.equal('POST')
       })
+
       expect(request.data).to.be.an('string');
       const payload = JSON.parse(request.data);
       expect(payload).to.have.property('auctionid', auctionId_);
@@ -226,9 +269,11 @@ describe('jixie Adapter', function () {
       expect(payload).to.have.property('client_id_ls', clientIdTest1_);
       expect(payload).to.have.property('session_id_c', sessionIdTest1_);
       expect(payload).to.have.property('session_id_ls', sessionIdTest1_);
+      expect(payload).to.have.property('jxeids').that.deep.equals(refJxEids_);
       expect(payload).to.have.property('device', device_);
       expect(payload).to.have.property('domain', domain_);
       expect(payload).to.have.property('pageurl', pageurl_);
+      expect(payload).to.have.property('mkeywords', keywords_);
       expect(payload).to.have.property('timeout', timeout_);
       expect(payload).to.have.property('currency', currency_);
       expect(payload).to.have.property('bids').that.deep.equals(refBids_);
@@ -238,20 +283,132 @@ describe('jixie Adapter', function () {
       getLocalStorageStub.restore();
       miscDimsStub.restore();
     });// it
+
+    it('it should popular the pricegranularity when info is available', function () {
+      let content = {
+        'ranges': [{
+          'max': 12,
+          'increment': 0.5
+        },
+        {
+          'max': 5,
+          'increment': 0.1
+        }],
+        precision: 1
+      };
+      let getConfigStub = sinon.stub(config, 'getConfig');
+      getConfigStub.callsFake(function fakeFn(prop) {
+        if (prop == 'priceGranularity') {
+          return content;
+        }
+        return null;
+      });
+
+      const oneSpecialBidReq = Object.assign({}, bidRequests_[0]);
+      const request = spec.buildRequests([oneSpecialBidReq], bidderRequest_);
+      const payload = JSON.parse(request.data);
+      getConfigStub.restore();
+      expect(payload.pricegranularity).to.deep.include(content);
+    });
+
+    it('it should popular the device info when it is available', function () {
+      let getConfigStub = sinon.stub(config, 'getConfig');
+      let content = {w: 500, h: 400};
+      getConfigStub.callsFake(function fakeFn(prop) {
+        if (prop == 'device') {
+          return content;
+        }
+        return null;
+      });
+      const oneSpecialBidReq = Object.assign({}, bidRequests_[0]);
+      const request = spec.buildRequests([oneSpecialBidReq], bidderRequest_);
+      const payload = JSON.parse(request.data);
+      getConfigStub.restore();
+      expect(payload.device).to.have.property('ua', navigator.userAgent);
+      expect(payload.device).to.deep.include(content);
+    });
+
+    it('schain info should be accessible when available', function () {
+      const schain = {
+        ver: '1.0',
+        complete: 1,
+        nodes: [{
+          asi: 'ssp.test',
+          sid: '00001',
+          hp: 1
+        }]
+      };
+      const oneSpecialBidReq = Object.assign({}, bidRequests_[0], { schain: schain });
+      const request = spec.buildRequests([oneSpecialBidReq], bidderRequest_);
+      const payload = JSON.parse(request.data);
+      expect(payload.schain).to.deep.equal(schain);
+      expect(payload.schain).to.deep.include(schain);
+    });
+
+    it('should populate eids when supported userIds are available', function () {
+      const oneSpecialBidReq = Object.assign({}, bidRequests_[0], {
+        userIdAsEids: [
+          {
+            'source': 'adserver.org',
+            'uids': [
+              {
+                'id': '11111111-2222-3333-4444-555555555555',
+                'atype': 1,
+                'ext': {
+                  'rtiPartner': 'TDID'
+                }
+              }
+            ]
+          },
+          {
+            'source': 'uidapi.com',
+            'uids': [
+              {
+                'id': 'AbCdEfGhIjKlMnO9qdQBW7qtMw8f1WTUvtkHe6u+fqLfhbtsqrJ697Z6YoI3IB9klGUv1wvlFIbwH7ELDlqQBGtj8AC1v7fMJ/Q45E7W90dts7UQLTDMLNmtHBRDXVb0Fpas4Vh3yN1jGVQNhzXC/RpGIVtZE8dCxcjfa7VfcTNcvxxxxx==',
+                'atype': 3
+              }
+            ]
+          },
+          {
+            'source': 'puburl1.com',
+            'uids': [
+              {
+                'id': 'pubid1',
+                'atype': 1,
+                'ext': {
+                  'stype': 'ppuid'
+                }
+              }
+            ]
+          },
+          {
+            'source': 'puburl2.com',
+            'uids': [
+              {
+                'id': 'pubid2'
+              }
+            ]
+          },
+        ],
+      });
+      const request = spec.buildRequests([oneSpecialBidReq], bidderRequest_);
+      const payload = JSON.parse(request.data);
+      expect(payload.eids).to.eql(oneSpecialBidReq.userIdAsEids);
+    });
   });// describe
 
   /**
    * interpretResponse:
    */
-  const JX_OTHER_OUTSTREAM_RENDERER_URL = 'https://scripts.jixie.io/dummyscript.js';
-  const JX_OUTSTREAM_RENDERER_URL = 'https://scripts.jixie.io/jxhboutstream.js';
+  const JX_OTHER_OUTSTREAM_RENDERER_URL = 'https://scripts.jixie.media/dummyscript.js';
+  const JX_OUTSTREAM_RENDERER_URL = 'https://scripts.jixie.media/jxhbrenderer.1.1.min.js';
 
-  const mockVastXml_ = `<?xml version="1.0" encoding="UTF-8"?><VAST xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="vast.xsd" version="3.0"><Ad id="JXAD521"><InLine><AdSystem>JXADSERVER</AdSystem><AdTitle>Alway%20Live%20Prebid%20Creative</AdTitle><Description>Hybrid in-stream</Description><Error><![CDATA[https://demo.com?action=error&errorcode=[ERRORCODE]&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Error><Impression><![CDATA[https://demo.com?action=impression&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Impression><Creatives><Creative id="JXAD521" sequence="1"><Linear><Duration>00:00:10</Duration><TrackingEvents><Tracking event="start"><![CDATA[https://demo.com?action=start&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="firstQuartile"><![CDATA[https://demo.com?action=firstQuartile&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="midpoint"><![CDATA[https://demo.com?action=midpoint&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="thirdQuartile"><![CDATA[https://demo.com?action=thirdQuartile&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="complete"><![CDATA[https://demo.com?action=complete&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="mute"><![CDATA[https://demo.com?action=mute&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="unmute"><![CDATA[https://demo.com?action=unmute&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="rewind"><![CDATA[https://demo.com?action=rewind&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="pause"><![CDATA[https://demo.com?action=pause&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="resume"><![CDATA[https://demo.com?action=resume&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="fullscreen"><![CDATA[https://demo.com?action=fullscreen&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="creativeView"><![CDATA[https://demo.com?action=creativeView&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking></TrackingEvents><VideoClicks><ClickThrough><![CDATA[https://toko-iot.com/search/?q=Sonos&utm_source=ivs&utm_medium=video&utm_campaign=promo&utm_content=sonos_category]]></ClickThrough><ClickTracking id="521"><![CDATA[https://demo.com?action=click&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></ClickTracking></VideoClicks><MediaFiles><MediaFile apiFramework="VPAID" type="application/javascript"><![CDATA[https://creatives.b-cdn.net/js/jxvpaid_1_0.min.js]]></MediaFile></MediaFiles><AdParameters><![CDATA[{"embed":true,"videos":[{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_240.mp4","bitrate":186,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_360.mp4","bitrate":229,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_480.mp4","bitrate":279,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_720.mp4","bitrate":325,"mimetype":"video/mp4"}],"countpos":"left","hotspots":[{"type":"direct_url","start":0,"duration":10,"position":"top-right","direct_url":"https://toko-iot.com/catalogue/category/audio_8/?utm_source=ivs&utm_medium=banner&utm_campaign=promo&utm_content=audio_category","thumbnail_url":"https://creatives.ivideosmart.com/hotspots/TokoIOT_1.gif","thumbnail_style":"full-height"}],"clickthru":"https://toko-iot.com/search/?q=Sonos&utm_source=ivs&utm_medium=video&utm_campaign=promo&utm_content=sonos_category","reporting":{},"skipoffset":5}]]></AdParameters><Icons><Icon program="AdChoices" width="20" height="20" xPosition="right" yPosition="top" offset="00:00:02"><StaticResource creativeType="image/png"><![CDATA[https://creatives.jixie.io/jxadchoice.png]]></StaticResource><IconClicks><IconClickThrough><![CDATA[https://www.jixie.io/privacy-policy]]></IconClickThrough></IconClicks></Icon></Icons></Linear></Creative><Creative sequence="1"/></Creatives></InLine></Ad></VAST>`;
+  const mockVastXml_ = `<?xml version="1.0" encoding="UTF-8"?><VAST xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="vast.xsd" version="3.0"><Ad id="JXAD521"><InLine><AdSystem>JXADSERVER</AdSystem><AdTitle>Alway%20Live%20Prebid%20Creative</AdTitle><Description>Hybrid in-stream</Description><Error><![CDATA[https://demo.com?action=error&errorcode=[ERRORCODE]&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Error><Impression><![CDATA[https://demo.com?action=impression&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Impression><Creatives><Creative id="JXAD521" sequence="1"><Linear><Duration>00:00:10</Duration><TrackingEvents><Tracking event="start"><![CDATA[https://demo.com?action=start&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="firstQuartile"><![CDATA[https://demo.com?action=firstQuartile&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="midpoint"><![CDATA[https://demo.com?action=midpoint&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="thirdQuartile"><![CDATA[https://demo.com?action=thirdQuartile&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="complete"><![CDATA[https://demo.com?action=complete&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="mute"><![CDATA[https://demo.com?action=mute&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="unmute"><![CDATA[https://demo.com?action=unmute&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="rewind"><![CDATA[https://demo.com?action=rewind&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="pause"><![CDATA[https://demo.com?action=pause&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="resume"><![CDATA[https://demo.com?action=resume&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="fullscreen"><![CDATA[https://demo.com?action=fullscreen&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking><Tracking event="creativeView"><![CDATA[https://demo.com?action=creativeView&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></Tracking></TrackingEvents><VideoClicks><ClickThrough><![CDATA[https://toko-iot.com/search/?q=Sonos&utm_source=ivs&utm_medium=video&utm_campaign=promo&utm_content=sonos_category]]></ClickThrough><ClickTracking id="521"><![CDATA[https://demo.com?action=click&mediaurl=[ASSETURI]&abc=1&stackidx=0]]></ClickTracking></VideoClicks><MediaFiles><MediaFile apiFramework="VPAID" type="application/javascript"><![CDATA[https://creatives.b-cdn.net/js/jxvpaid_1_0.min.js]]></MediaFile></MediaFiles><AdParameters><![CDATA[{"embed":true,"videos":[{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_240.mp4","bitrate":186,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_360.mp4","bitrate":229,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_480.mp4","bitrate":279,"mimetype":"video/mp4"},{"url":"https://creative-ivstream.ivideosmart.com/3001004/954006/3001004-954006_720.mp4","bitrate":325,"mimetype":"video/mp4"}],"countpos":"left","hotspots":[{"type":"direct_url","start":0,"duration":10,"position":"top-right","direct_url":"https://toko-iot.com/catalogue/category/audio_8/?utm_source=ivs&utm_medium=banner&utm_campaign=promo&utm_content=audio_category","thumbnail_url":"https://creatives.ivideosmart.com/hotspots/TokoIOT_1.gif","thumbnail_style":"full-height"}],"clickthru":"https://toko-iot.com/search/?q=Sonos&utm_source=ivs&utm_medium=video&utm_campaign=promo&utm_content=sonos_category","reporting":{},"skipoffset":5}]]></AdParameters><Icons><Icon program="AdChoices" width="20" height="20" xPosition="right" yPosition="top" offset="00:00:02"><StaticResource creativeType="image/png"><![CDATA[https://creatives.jixie.media/jxadchoice.png]]></StaticResource><IconClicks><IconClickThrough><![CDATA[https://www.jixie.io/privacy-policy]]></IconClickThrough></IconClicks></Icon></Icons></Linear></Creative><Creative sequence="1"/></Creatives></InLine></Ad></VAST>`;
   const responseBody_ = {
     'bids': [
       // video (vast tag url) returned here
       {
-        'trackingUrlBase': 'https://tr.jixie.io/sync/ad?',
+        'trackingUrlBase': 'https://traid.jixie.io/sync/ad?',
         'jxBidId': '62847e4c696edcb-028d5dee-2c83-44e3-bed1-b75002475cdf',
         'requestId': '62847e4c696edcb',
         'cpm': 2.19,
@@ -281,9 +438,10 @@ describe('jixie Adapter', function () {
         },
         'vastUrl': 'https://ad.jixie.io/v1/video?creativeid=522'
       },
-      // display ad returned here:
+      // display ad returned here: This one there is advertiserDomains
+      // in the response . Will be checked in the unit tests below
       {
-        'trackingUrlBase': 'https://tr.jixie.io/sync/ad?',
+        'trackingUrlBase': 'https://traid.jixie.io/sync/ad?',
         'jxBidId': '600c9ae6fda1acb-028d5dee-2c83-44e3-bed1-b75002475cdf',
         'requestId': '600c9ae6fda1acb',
         'cpm': 1.999,
@@ -316,11 +474,11 @@ describe('jixie Adapter', function () {
           ],
           'mediaType': 'BANNER'
         },
-        'ad': '<div id="jxoutstream" style="width: 100%;"> <script type="text/javascript" src="https://scripts.jixie.io/jxfriendly.1.3.min.js" defer=""></script> <script> var p ={ responsive: 1, nested: 1, maxwidth: 640,  container: "jxoutstream", creativeid: 520}; function jxdefer(p) { if (window.jxuniversal) { window.jxuniversal.init(p); } else { setTimeout(function() { jxdefer(p) }, 100); } } jxdefer(p); </script> </div>'
+        'ad': '<div id="jxoutstream" style="width: 100%;"> <script type="text/javascript" src="https://scripts.jixie.media/jxfriendly.1.3.min.js" defer=""></script> <script> var p ={ responsive: 1, nested: 1, maxwidth: 640,  container: "jxoutstream", creativeid: 520}; function jxdefer(p) { if (window.jxuniversal) { window.jxuniversal.init(p); } else { setTimeout(function() { jxdefer(p) }, 100); } } jxdefer(p); </script> </div>'
       },
       // outstream, jx non-default renderer specified:
       {
-        'trackingUrlBase': 'https://tr.jixie.io/sync/ad?',
+        'trackingUrlBase': 'https://traid.jixie.io/sync/ad?',
         'jxBidId': '99bc539c81b00ce-028d5dee-2c83-44e3-bed1-b75002475cdf',
         'requestId': '99bc539c81b00ce',
         'cpm': 2.99,
@@ -339,7 +497,7 @@ describe('jixie Adapter', function () {
       },
       // outstream, jx default renderer:
       {
-        'trackingUrlBase': 'https://tr.jixie.io/sync/ad?',
+        'trackingUrlBase': 'https://traid.jixie.io/sync/ad?',
         'jxBidId': '61bc539c81b00ce-028d5dee-2c83-44e3-bed1-b75002475cdf',
         'requestId': '61bc539c81b00ce',
         'cpm': 1.99,
@@ -395,10 +553,10 @@ describe('jixie Adapter', function () {
       let setCookieSpy = sinon.spy(storage, 'setCookie');
       let setLocalStorageSpy = sinon.spy(storage, 'setDataInLocalStorage');
       const result = spec.interpretResponse({body: responseBody_}, requestObj_)
-      expect(setLocalStorageSpy.calledWith('_jx', '43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
-      expect(setLocalStorageSpy.calledWith('_jxs', '1600057934-43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
-      expect(setCookieSpy.calledWith('_jxs', '1600057934-43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
-      expect(setCookieSpy.calledWith('_jx', '43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
+      expect(setLocalStorageSpy.calledWith('_jxx', '43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
+      expect(setLocalStorageSpy.calledWith('_jxxs', '1600057934-43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
+      expect(setCookieSpy.calledWith('_jxxs', '1600057934-43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
+      expect(setCookieSpy.calledWith('_jxx', '43aacc10-f643-11ea-8a10-c5fe2d394e7e')).to.equal(true);
 
       // video ad with vastUrl returned by adserver
       expect(result[0].requestId).to.equal('62847e4c696edcb')
@@ -411,6 +569,9 @@ describe('jixie Adapter', function () {
       expect(result[0].ttl).to.equal(300)
       expect(result[0].vastUrl).to.include('https://ad.jixie.io/v1/video?creativeid=')
       expect(result[0].trackingUrlBase).to.include('sync')
+      // We will always make sure the meta->advertiserDomains property is there
+      // If no info it is an empty array.
+      expect(result[0].meta.advertiserDomains.length).to.equal(0)
 
       // display ad
       expect(result[1].requestId).to.equal('600c9ae6fda1acb')
@@ -422,6 +583,7 @@ describe('jixie Adapter', function () {
       expect(result[1].netRevenue).to.equal(true)
       expect(result[1].ttl).to.equal(300)
       expect(result[1].ad).to.include('jxoutstream')
+      expect(result[1].meta.advertiserDomains.length).to.equal(3)
       expect(result[1].trackingUrlBase).to.include('sync')
 
       // should pick up about using alternative outstream renderer
@@ -436,6 +598,7 @@ describe('jixie Adapter', function () {
       expect(result[2].vastXml).to.include('<?xml version="1.0" encoding="UTF-8"?>')
       expect(result[2].trackingUrlBase).to.include('sync');
       expect(result[2].renderer.id).to.equal('demoslot4-div')
+      expect(result[2].meta.advertiserDomains.length).to.equal(0)
       expect(result[2].renderer.url).to.equal(JX_OTHER_OUTSTREAM_RENDERER_URL);
 
       // should know to use default outstream renderer
@@ -450,6 +613,7 @@ describe('jixie Adapter', function () {
       expect(result[3].vastXml).to.include('<?xml version="1.0" encoding="UTF-8"?>')
       expect(result[3].trackingUrlBase).to.include('sync');
       expect(result[3].renderer.id).to.equal('demoslot2-div')
+      expect(result[3].meta.advertiserDomains.length).to.equal(0)
       expect(result[3].renderer.url).to.equal(JX_OUTSTREAM_RENDERER_URL)
 
       setLocalStorageSpy.restore();
@@ -468,7 +632,7 @@ describe('jixie Adapter', function () {
       ajaxStub = sinon.stub(jixieaux, 'ajax');
 
       miscDimsStub
-        .returns({ device: device_, pageurl: pageurl_, domain: domain_ });
+        .returns({ device: device_, pageurl: pageurl_, domain: domain_, mkeywords: keywords_ });
     })
 
     afterEach(function() {
@@ -530,7 +694,7 @@ describe('jixie Adapter', function () {
       ajaxStub = sinon.stub(jixieaux, 'ajax');
       miscDimsStub = sinon.stub(jixieaux, 'getMiscDims');
       miscDimsStub
-        .returns({ device: device_, pageurl: pageurl_, domain: domain_ });
+        .returns({ device: device_, pageurl: pageurl_, domain: domain_, mkeywords: keywords_ });
     })
 
     afterEach(function() {
