@@ -1,36 +1,27 @@
-
 let path = require('path');
-
-function useLocal(module) {
-  return require.resolve(module, {
-    paths: [
-      __dirname
-    ]
-  })
-}
 
 module.exports = function (options = {}) {
   return {
-    'presets': [
+    presets: [
       [
-        useLocal('@babel/preset-env'),
+        "@babel/preset-env",
         {
-          'useBuiltIns': 'entry',
-          'corejs': '3.13.0',
+          useBuiltIns: "entry",
+          corejs: "3.13.0",
           // a lot of tests use sinon.stub & others that stopped working on ES6 modules with webpack 5
-          'modules': options.test ? 'commonjs' : 'auto',
-        }
-      ]
+          modules: options.test ? "commonjs" : "auto",
+        },
+      ],
     ],
-    'plugins': (() => {
+    plugins: (() => {
       const plugins = [
-        [path.resolve(__dirname, './plugins/pbjsGlobals.js'), options],
-        [useLocal('@babel/plugin-transform-runtime')],
+        [path.resolve(__dirname, "./plugins/pbjsGlobals.js"), options],
+        ["@babel/plugin-transform-runtime"],
       ];
       if (options.codeCoverage) {
-        plugins.push([useLocal('babel-plugin-istanbul')])
+        plugins.push(["babel-plugin-istanbul"]);
       }
       return plugins;
     })(),
-  }
-}
+  };
+};
