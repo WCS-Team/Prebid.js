@@ -19,6 +19,11 @@ describe('PulsePoint Adapter Tests', function () {
     }
   }, {
     placementCode: '/DfpAccount2/slot2',
+    mediaTypes: {
+      banner: {
+        sizes: [[728, 90]]
+      }
+    },
     bidId: 'bid23456',
     params: {
       cp: 'p10000',
@@ -72,6 +77,11 @@ describe('PulsePoint Adapter Tests', function () {
   }];
   const additionalParamsConfig = [{
     placementCode: '/DfpAccount1/slot1',
+    mediaTypes: {
+      banner: {
+        sizes: [[1, 1]]
+      }
+    },
     bidId: 'bid12345',
     params: {
       cp: 'p10000',
@@ -89,6 +99,11 @@ describe('PulsePoint Adapter Tests', function () {
 
   const ortbParamsSlotConfig = [{
     placementCode: '/DfpAccount1/slot1',
+    mediaTypes: {
+      banner: {
+        sizes: [[1, 1]]
+      }
+    },
     bidId: 'bid12345',
     params: {
       cp: 'p10000',
@@ -146,6 +161,11 @@ describe('PulsePoint Adapter Tests', function () {
 
   const schainParamsSlotConfig = [{
     placementCode: '/DfpAccount1/slot1',
+    mediaTypes: {
+      banner: {
+        sizes: [[1, 1]]
+      }
+    },
     bidId: 'bid12345',
     params: {
       cp: 'p10000',
@@ -174,7 +194,8 @@ describe('PulsePoint Adapter Tests', function () {
 
   const bidderRequest = {
     refererInfo: {
-      referer: 'https://publisher.com/home'
+      page: 'https://publisher.com/home',
+      ref: 'https://referrer'
     }
   };
 
@@ -187,7 +208,7 @@ describe('PulsePoint Adapter Tests', function () {
     expect(ortbRequest.site).to.not.equal(null);
     expect(ortbRequest.site.publisher).to.not.equal(null);
     expect(ortbRequest.site.publisher.id).to.equal('p10000');
-    expect(ortbRequest.site.ref).to.equal(window.top.document.referrer);
+    expect(ortbRequest.site.ref).to.equal(bidderRequest.refererInfo.ref);
     expect(ortbRequest.site.page).to.equal('https://publisher.com/home');
     expect(ortbRequest.imp).to.have.lengthOf(2);
     // device object
@@ -203,6 +224,8 @@ describe('PulsePoint Adapter Tests', function () {
     expect(ortbRequest.imp[1].banner).to.not.equal(null);
     expect(ortbRequest.imp[1].banner.w).to.equal(728);
     expect(ortbRequest.imp[1].banner.h).to.equal(90);
+    // tmax
+    expect(ortbRequest.tmax).to.equal(500);
   });
 
   it('Verify parse response', function () {
@@ -234,7 +257,7 @@ describe('PulsePoint Adapter Tests', function () {
     expect(bid.ttl).to.equal(20);
   });
 
-  it('Verify ttl/currency applied to bid', function () {
+  it('Verify ttl/currency/adomain applied to bid', function () {
     const request = spec.buildRequests(slotConfigs, bidderRequest);
     const ortbRequest = request.data;
     const ortbResponse = {
@@ -244,7 +267,8 @@ describe('PulsePoint Adapter Tests', function () {
           price: 1.25,
           adm: 'This is an Ad#1',
           crid: 'Creative#123',
-          exp: 50
+          exp: 50,
+          adomain: ['advertiser.com']
         }, {
           impid: ortbRequest.imp[1].id,
           price: 1.25,
@@ -262,11 +286,15 @@ describe('PulsePoint Adapter Tests', function () {
     expect(bid.ad).to.equal('This is an Ad#1');
     expect(bid.ttl).to.equal(50);
     expect(bid.currency).to.equal('GBP');
+    expect(bid.meta).to.not.be.null;
+    expect(bid.meta.advertiserDomains).to.eql(['advertiser.com']);
     const secondBid = bids[1];
     expect(secondBid.cpm).to.equal(1.25);
     expect(secondBid.ad).to.equal('This is an Ad#2');
     expect(secondBid.ttl).to.equal(20);
     expect(secondBid.currency).to.equal('GBP');
+    expect(secondBid.meta).to.not.be.null;
+    expect(secondBid.meta.advertiserDomains).to.eql([]);
   });
 
   it('Verify full passback', function () {
@@ -590,19 +618,21 @@ describe('PulsePoint Adapter Tests', function () {
   });
   it('Verify common id parameters', function () {
     const bidRequests = deepClone(slotConfigs);
-    bidRequests[0].userId = {
-      pubcid: 'userid_pubcid',
-      tdid: 'userid_ttd',
-      digitrustid: {
-        data: {
-          id: 'userid_digitrust',
-          keyv: 4,
-          privacy: {optout: false},
-          producer: 'ABC',
-          version: 2
+    bidRequests[0].userIdAsEids = [{
+      source: 'pubcid.org',
+      uids: [{
+        id: 'userid_pubcid'
+      }]
+    }, {
+      source: 'adserver.org',
+      uids: [{
+        id: 'userid_ttd',
+        ext: {
+          rtiPartner: 'TDID'
         }
-      }
-    };
+      }]
+    }
+    ];
     const request = spec.buildRequests(bidRequests, bidderRequest);
     expect(request).to.be.not.null;
     const ortbRequest = request.data;
@@ -611,54 +641,7 @@ describe('PulsePoint Adapter Tests', function () {
     expect(ortbRequest.user).to.not.be.undefined;
     expect(ortbRequest.user.ext).to.not.be.undefined;
     expect(ortbRequest.user.ext.eids).to.not.be.undefined;
-    expect(ortbRequest.user.ext.eids).to.have.lengthOf(2);
-    expect(ortbRequest.user.ext.eids[0].source).to.equal('pubcommon');
-    expect(ortbRequest.user.ext.eids[0].uids).to.have.lengthOf(1);
-    expect(ortbRequest.user.ext.eids[0].uids[0].id).to.equal('userid_pubcid');
-    expect(ortbRequest.user.ext.eids[1].source).to.equal('adserver.org');
-    expect(ortbRequest.user.ext.eids[1].uids).to.have.lengthOf(1);
-    expect(ortbRequest.user.ext.eids[1].uids[0].id).to.equal('userid_ttd');
-    expect(ortbRequest.user.ext.eids[1].uids[0].ext).to.not.be.null;
-    expect(ortbRequest.user.ext.eids[1].uids[0].ext.rtiPartner).to.equal('TDID');
-    expect(ortbRequest.user.ext.digitrust).to.not.be.null;
-    expect(ortbRequest.user.ext.digitrust.id).to.equal('userid_digitrust');
-    expect(ortbRequest.user.ext.digitrust.keyv).to.equal(4);
-  });
-  it('Verify new external user id partners', function () {
-    const bidRequests = deepClone(slotConfigs);
-    bidRequests[0].userId = {
-      britepoolid: 'britepool_id123',
-      criteoId: 'criteo_id234',
-      idl_env: 'idl_id123',
-      id5id: 'id5id_234',
-      parrableid: 'parrable_id234',
-      lipb: {
-        lipbid: 'liveintent_id123'
-      }
-    };
-    const userVerify = function(obj, source, id) {
-      expect(obj).to.deep.equal({
-        source,
-        uids: [{
-          id
-        }]
-      });
-    };
-    const request = spec.buildRequests(bidRequests, bidderRequest);
-    expect(request).to.be.not.null;
-    const ortbRequest = request.data;
-    expect(request.data).to.be.not.null;
-    // user object
-    expect(ortbRequest.user).to.not.be.undefined;
-    expect(ortbRequest.user.ext).to.not.be.undefined;
-    expect(ortbRequest.user.ext.eids).to.not.be.undefined;
-    expect(ortbRequest.user.ext.eids).to.have.lengthOf(6);
-    userVerify(ortbRequest.user.ext.eids[0], 'britepool.com', 'britepool_id123');
-    userVerify(ortbRequest.user.ext.eids[1], 'criteo', 'criteo_id234');
-    userVerify(ortbRequest.user.ext.eids[2], 'identityLink', 'idl_id123');
-    userVerify(ortbRequest.user.ext.eids[3], 'id5-sync.com', 'id5id_234');
-    userVerify(ortbRequest.user.ext.eids[4], 'parrable.com', 'parrable_id234');
-    userVerify(ortbRequest.user.ext.eids[5], 'liveintent.com', 'liveintent_id123');
+    expect(ortbRequest.user.ext.eids).to.deep.equal(bidRequests[0].userIdAsEids);
   });
   it('Verify multiple adsizes', function () {
     const bidRequests = deepClone(slotConfigs);
@@ -681,7 +664,10 @@ describe('PulsePoint Adapter Tests', function () {
     expect(ortbRequest.imp[1].banner).to.not.be.null;
     expect(ortbRequest.imp[1].banner.w).to.equal(728);
     expect(ortbRequest.imp[1].banner.h).to.equal(90);
-    expect(ortbRequest.imp[1].banner.format).to.be.null;
+    expect(ortbRequest.imp[1].banner.format).to.not.be.null;
+    expect(ortbRequest.imp[1].banner.format).to.have.lengthOf(1);
+    expect(ortbRequest.imp[1].banner.format[0].w).to.equal(728);
+    expect(ortbRequest.imp[1].banner.format[0].h).to.equal(90);
     // adsize on response
     const ortbResponse = {
       seatbid: [{
@@ -700,5 +686,246 @@ describe('PulsePoint Adapter Tests', function () {
     const bid = bids[0];
     expect(bid.width).to.equal(728);
     expect(bid.height).to.equal(90);
+  });
+  it('Verify multi-format response', function () {
+    const bidRequests = deepClone(slotConfigs);
+    bidRequests[0].mediaTypes['native'] = {
+      title: {
+        required: true
+      },
+      image: {
+        required: true
+      },
+      sponsoredBy: {
+        required: true
+      }
+    };
+    bidRequests[1].params.video = {
+      w: 400,
+      h: 300,
+      minduration: 5,
+      maxduration: 10,
+    };
+    const request = spec.buildRequests(bidRequests, bidderRequest);
+    expect(request).to.be.not.null;
+    expect(request.data).to.be.not.null;
+    const ortbRequest = request.data;
+    expect(ortbRequest.imp).to.have.lengthOf(2);
+    // adsize on response
+    const ortbResponse = {
+      seatbid: [{
+        bid: [{
+          impid: ortbRequest.imp[0].id,
+          price: 1.25,
+          adm: 'This is an Ad',
+          crid: 'Creative#123',
+          w: 728,
+          h: 90
+        }, {
+          impid: ortbRequest.imp[1].id,
+          price: 2.5,
+          adm: '<vast url="http://ad.com/video"></vast>',
+          crid: 'Creative#234',
+          w: 728,
+          h: 90
+        }]
+      }]
+    };
+    // request has both types - banner and native, response is parsed as banner.
+    // for impression#2, response is parsed as video
+    const bids = spec.interpretResponse({ body: ortbResponse }, request);
+    expect(bids).to.have.lengthOf(2);
+    const bid = bids[0];
+    expect(bid.width).to.equal(728);
+    expect(bid.height).to.equal(90);
+    const secondBid = bids[1];
+    expect(secondBid.vastXml).to.equal('<vast url="http://ad.com/video"></vast>');
+  });
+  it('Verify bid floor', function () {
+    const bidRequests = deepClone(slotConfigs);
+    bidRequests[0].params.bidfloor = 1.05;
+    let request = spec.buildRequests(bidRequests, bidderRequest);
+    let ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.imp[0].bidfloor).to.equal(1.05);
+    expect(ortbRequest.imp[1].bidfloor).to.be.undefined;
+    let floorArg = null;
+    // publisher uses the floor module
+    bidRequests[0].getFloor = (arg) => {
+      floorArg = arg;
+      return { floor: 1.25 };
+    };
+    bidRequests[1].getFloor = () => {
+      return { floor: 2.05 };
+    };
+    request = spec.buildRequests(bidRequests, bidderRequest);
+    ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.imp[0].bidfloor).to.equal(1.25);
+    expect(ortbRequest.imp[1].bidfloor).to.equal(2.05);
+    expect(floorArg).to.not.be.null;
+    expect(floorArg.mediaType).to.equal('banner');
+    expect(floorArg.currency).to.equal('USD');
+    expect(floorArg.size).to.equal('*');
+  });
+  it('Verify Video params on mediaTypes.video', function () {
+    const bidRequests = deepClone(videoSlotConfig);
+    bidRequests[0].mediaTypes = {
+      video: {
+        w: 600,
+        h: 400,
+        minduration: 15,
+        maxduration: 20,
+        startdelay: 10,
+        skip: 0,
+      }
+    };
+    const request = spec.buildRequests(bidRequests, bidderRequest);
+    const ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.imp).to.have.lengthOf(1);
+    expect(ortbRequest.imp[0].video).to.not.be.null;
+    expect(ortbRequest.imp[0].native).to.be.null;
+    expect(ortbRequest.imp[0].banner).to.be.null;
+    expect(ortbRequest.imp[0].video.w).to.equal(600);
+    expect(ortbRequest.imp[0].video.h).to.equal(400);
+    expect(ortbRequest.imp[0].video.minduration).to.equal(15);
+    expect(ortbRequest.imp[0].video.maxduration).to.equal(20);
+    expect(ortbRequest.imp[0].video.startdelay).to.equal(10);
+    expect(ortbRequest.imp[0].video.skip).to.equal(0);
+    expect(ortbRequest.imp[0].video.minbitrate).to.equal(200);
+    expect(ortbRequest.imp[0].video.protocols).to.eql([1, 2, 4]);
+  });
+  it('Verify user level first party data', function () {
+    const bidderRequest = {
+      refererInfo: {
+        page: 'https://publisher.com/home',
+        ref: 'https://referrer'
+      },
+      gdprConsent: {
+        gdprApplies: true,
+        consentString: 'serialized_gpdr_data'
+      },
+      ortb2: {
+        user: {
+          yob: 1985,
+          gender: 'm',
+          ext: {
+            data: {
+              registered: true,
+              interests: ['cars']
+            }
+          }
+        }
+      }
+    };
+    let request = spec.buildRequests(slotConfigs, bidderRequest);
+    let ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.user).to.not.equal(null);
+    expect(ortbRequest.user).to.deep.equal({
+      yob: 1985,
+      gender: 'm',
+      ext: {
+        data: {
+          registered: true,
+          interests: ['cars']
+        },
+        consent: 'serialized_gpdr_data'
+      }
+    });
+  });
+  it('Verify site level first party data', function () {
+    const bidderRequest = {
+      refererInfo: {
+        page: 'https://publisher.com/home',
+        ref: 'https://referrer'
+      },
+      ortb2: {
+        site: {
+          content: {
+            data: [{
+              name: 'www.iris.com',
+              ext: {
+                segtax: 500,
+                cids: ['iris_c73g5jq96mwso4d8']
+              }
+            }]
+          },
+          page: 'http://pub.com/news',
+          ref: 'http://google.com'
+        }
+      }
+    };
+    let request = spec.buildRequests(slotConfigs, bidderRequest);
+    let ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.site).to.not.equal(null);
+    expect(ortbRequest.site).to.deep.equal({
+      content: {
+        data: [{
+          name: 'www.iris.com',
+          ext: {
+            segtax: 500,
+            cids: ['iris_c73g5jq96mwso4d8']
+          }
+        }]
+      },
+      page: 'https://publisher.com/home',
+      ref: 'https://referrer',
+      publisher: {
+        id: 'p10000'
+      }
+    });
+  });
+  it('Verify impression/slot level first party data', function () {
+    const bidderRequests = [{
+      placementCode: '/DfpAccount1/slot1',
+      mediaTypes: {
+        banner: {
+          sizes: [[1, 1]]
+        }
+      },
+      bidId: 'bid12345',
+      params: {
+        cp: 'p10000',
+        ct: 't10000',
+        extra_key1: 'extra_val1',
+        extra_key2: 12345
+      },
+      ortb2Imp: {
+        ext: {
+          data: {
+            pbadslot: 'homepage-top-rect',
+            adUnitSpecificAttribute: '123'
+          }
+        }
+      }
+    }];
+    let request = spec.buildRequests(bidderRequests, bidderRequest);
+    let ortbRequest = request.data;
+    expect(ortbRequest).to.not.equal(null);
+    expect(ortbRequest.imp).to.not.equal(null);
+    expect(ortbRequest.imp).to.have.lengthOf(1);
+    expect(ortbRequest.imp[0].ext).to.not.equal(null);
+    expect(ortbRequest.imp[0].ext).to.deep.equal({
+      prebid: {
+        extra_key1: 'extra_val1',
+        extra_key2: 12345
+      },
+      data: {
+        pbadslot: 'homepage-top-rect',
+        adUnitSpecificAttribute: '123'
+      }
+    });
+  });
+
+  it('Verify bid request timeouts', function () {
+    const mkRequest = (bidderRequest) => spec.buildRequests(slotConfigs, bidderRequest).data;
+    // assert default is used when no bidderRequest.timeout value is available
+    expect(mkRequest(bidderRequest).tmax).to.equal(500)
+
+    // assert bidderRequest value is used when available
+    expect(mkRequest(Object.assign({}, { timeout: 6000 }, bidderRequest)).tmax).to.equal(6000)
   });
 });

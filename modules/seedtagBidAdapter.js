@@ -1,15 +1,53 @@
-import * as utils from '../src/utils.js'
-import { registerBidder } from '../src/adapters/bidderFactory.js'
-import { VIDEO, BANNER } from '../src/mediaTypes.js'
+import { isArray, _map, triggerPixel } from '../src/utils.js';
+import { registerBidder } from '../src/adapters/bidderFactory.js';
+import { VIDEO, BANNER } from '../src/mediaTypes.js';
+import { config } from '../src/config.js';
 
 const BIDDER_CODE = 'seedtag';
 const SEEDTAG_ALIAS = 'st';
 const SEEDTAG_SSP_ENDPOINT = 'https://s.seedtag.com/c/hb/bid';
 const SEEDTAG_SSP_ONTIMEOUT_ENDPOINT = 'https://s.seedtag.com/se/hb/timeout';
+const ALLOWED_DISPLAY_PLACEMENTS = [
+  'inScreen',
+  'inImage',
+  'inArticle',
+  'inBanner',
+];
+
+// Global Vendor List Id
+// https://iabeurope.eu/vendor-list-tcf-v2-0/
+const GVLID = 157;
 
 const mediaTypesMap = {
   [BANNER]: 'display',
-  [VIDEO]: 'video'
+  [VIDEO]: 'video',
+};
+
+const deviceConnection = {
+  FIXED: 'fixed',
+  MOBILE: 'mobile',
+  UNKNOWN: 'unknown',
+};
+
+const getConnectionType = () => {
+  const connection =
+    navigator.connection ||
+    navigator.mozConnection ||
+    navigator.webkitConnection ||
+    {};
+  switch (connection.type || connection.effectiveType) {
+    case 'wifi':
+    case 'ethernet':
+      return deviceConnection.FIXED;
+    case 'cellular':
+    case 'wimax':
+      return deviceConnection.MOBILE;
+    default:
+      const isMobile =
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        /android/i.test(navigator.userAgent);
+      return isMobile ? deviceConnection.UNKNOWN : deviceConnection.FIXED;
+  }
 };
 
 function mapMediaType(seedtagMediaType) {
@@ -18,66 +56,90 @@ function mapMediaType(seedtagMediaType) {
   else return seedtagMediaType;
 }
 
-function getMediaTypeFromBid(bid) {
-  return bid.mediaTypes && Object.keys(bid.mediaTypes)[0]
+function hasVideoMediaType(bid) {
+  return !!bid.mediaTypes && !!bid.mediaTypes.video;
 }
 
-function hasMandatoryParams(params) {
+function hasBannerMediaType(bid) {
+  return !!bid.mediaTypes && !!bid.mediaTypes.banner;
+}
+
+function hasMandatoryDisplayParams(bid) {
+  const p = bid.params;
   return (
-    !!params.publisherId &&
-    !!params.adUnitId &&
-    !!params.placement &&
-    (params.placement === 'inImage' ||
-      params.placement === 'inScreen' ||
-      params.placement === 'banner' ||
-      params.placement === 'video')
+    !!p.publisherId &&
+    !!p.adUnitId &&
+    ALLOWED_DISPLAY_PLACEMENTS.indexOf(p.placement) > -1
   );
 }
 
-function hasVideoMandatoryParams(mediaTypes) {
-  const isVideoInStream =
-    !!mediaTypes.video && mediaTypes.video.context === 'instream';
-  const isPlayerSize =
-    !!utils.deepAccess(mediaTypes, 'video.playerSize') &&
-    utils.isArray(utils.deepAccess(mediaTypes, 'video.playerSize'));
-  return isVideoInStream && isPlayerSize;
+function hasMandatoryVideoParams(bid) {
+  const videoParams = getVideoParams(bid);
+
+  let isValid =
+    !!bid.params.publisherId &&
+    !!bid.params.adUnitId &&
+    hasVideoMediaType(bid) &&
+    !!videoParams.playerSize &&
+    isArray(videoParams.playerSize) &&
+    videoParams.playerSize.length > 0;
+
+  switch (bid.params.placement) {
+    // instream accept only video format
+    case 'inStream':
+      return isValid && videoParams.context === 'instream';
+    // outstream accept banner/native/video format
+    default:
+      return (
+        isValid &&
+        videoParams.context === 'outstream' &&
+        hasBannerMediaType(bid) &&
+        hasMandatoryDisplayParams(bid)
+      );
+  }
 }
 
-function buildBidRequests(validBidRequests) {
-  return utils._map(validBidRequests, function(validBidRequest) {
-    const params = validBidRequest.params;
-    const mediaTypes = utils._map(
-      Object.keys(validBidRequest.mediaTypes),
-      function(pbjsType) {
-        return mediaTypesMap[pbjsType];
-      }
-    );
-    const bidRequest = {
-      id: validBidRequest.bidId,
-      transactionId: validBidRequest.transactionId,
-      sizes: validBidRequest.sizes,
-      supplyTypes: mediaTypes,
-      adUnitId: params.adUnitId,
-      placement: params.placement
-    };
-
-    if (params.adPosition) {
-      bidRequest.adPosition = params.adPosition;
+function buildBidRequest(validBidRequest) {
+  const params = validBidRequest.params;
+  const mediaTypes = _map(
+    Object.keys(validBidRequest.mediaTypes),
+    function (pbjsType) {
+      return mediaTypesMap[pbjsType];
     }
+  );
 
-    if (params.video) {
-      bidRequest.videoParams = params.video || {};
-      bidRequest.videoParams.w =
-        validBidRequest.mediaTypes.video.playerSize[0][0];
-      bidRequest.videoParams.h =
-        validBidRequest.mediaTypes.video.playerSize[0][1];
-    }
+  const bidRequest = {
+    id: validBidRequest.bidId,
+    transactionId: validBidRequest.ortb2Imp?.ext?.tid,
+    sizes: validBidRequest.sizes,
+    supplyTypes: mediaTypes,
+    adUnitId: params.adUnitId,
+    adUnitCode: validBidRequest.adUnitCode,
+    placement: params.placement,
+    requestCount: validBidRequest.bidderRequestsCount || 1, // FIXME : in unit test the parameter bidderRequestsCount is undefined
+  };
 
-    return bidRequest;
-  })
+  if (hasVideoMediaType(validBidRequest)) {
+    bidRequest.videoParams = getVideoParams(validBidRequest);
+  }
+
+  return bidRequest;
 }
 
-function buildBid(seedtagBid) {
+/**
+ * return video param (global or overrided per bidder)
+ */
+function getVideoParams(validBidRequest) {
+  const videoParams = validBidRequest.mediaTypes.video || {};
+  if (videoParams.playerSize) {
+    videoParams.w = videoParams.playerSize[0][0];
+    videoParams.h = videoParams.playerSize[0][1];
+  }
+
+  return videoParams;
+}
+
+function buildBidResponse(seedtagBid) {
   const mediaType = mapMediaType(seedtagBid.mediaType);
   const bid = {
     requestId: seedtagBid.bidId,
@@ -88,8 +150,16 @@ function buildBid(seedtagBid) {
     currency: seedtagBid.currency,
     netRevenue: true,
     mediaType: mediaType,
-    ttl: seedtagBid.ttl
+    ttl: seedtagBid.ttl,
+    nurl: seedtagBid.nurl,
+    meta: {
+      advertiserDomains:
+        seedtagBid && seedtagBid.adomain && seedtagBid.adomain.length > 0
+          ? seedtagBid.adomain
+          : [],
+    },
   };
+
   if (mediaType === VIDEO) {
     bid.vastXml = seedtagBid.content;
   } else {
@@ -98,25 +168,63 @@ function buildBid(seedtagBid) {
   return bid;
 }
 
-export function getTimeoutUrl (data) {
+/**
+ *
+ * @returns Measure time to first byte implementation
+ * @see https://web.dev/ttfb/
+ *      https://developer.mozilla.org/en-US/docs/Web/API/Navigation_timing_API
+ */
+function ttfb() {
+  const ttfb = (() => {
+    // Timing API V2
+    try {
+      const entry = performance.getEntriesByType('navigation')[0];
+      return Math.round(entry.responseStart - entry.startTime);
+    } catch (e) {
+      // Timing API V1
+      try {
+        const entry = performance.timing;
+        return Math.round(entry.responseStart - entry.fetchStart);
+      } catch (e) {
+        // Timing API not available
+        return 0;
+      }
+    }
+  })();
+
+  // prevent negative or excessive value
+  // @see https://github.com/googleChrome/web-vitals/issues/162
+  //      https://github.com/googleChrome/web-vitals/issues/137
+  return ttfb >= 0 && ttfb <= performance.now() ? ttfb : 0;
+}
+
+export function getTimeoutUrl(data) {
   let queryParams = '';
   if (
-    utils.isArray(data) && data[0] &&
-    utils.isArray(data[0].params) && data[0].params[0]
+    isArray(data) &&
+    data[0] &&
+    isArray(data[0].params) &&
+    data[0].params[0]
   ) {
     const params = data[0].params[0];
+    const timeout = data[0].timeout;
+
     queryParams =
-      '?publisherToken=' + params.publisherId +
-      '&adUnitId=' + params.adUnitId;
+      '?publisherToken=' +
+      params.publisherId +
+      '&adUnitId=' +
+      params.adUnitId +
+      '&timeout=' +
+      timeout;
   }
   return SEEDTAG_SSP_ONTIMEOUT_ENDPOINT + queryParams;
 }
 
 export const spec = {
   code: BIDDER_CODE,
+  gvlid: GVLID,
   aliases: [SEEDTAG_ALIAS],
   supportedMediaTypes: [BANNER, VIDEO],
-
   /**
    * Determines whether or not the given bid request is valid.
    *
@@ -124,9 +232,9 @@ export const spec = {
    * @return boolean True if this is a valid bid, and false otherwise.
    */
   isBidRequestValid(bid) {
-    return getMediaTypeFromBid(bid) === VIDEO
-      ? hasMandatoryParams(bid.params) && hasVideoMandatoryParams(bid.mediaTypes)
-      : hasMandatoryParams(bid.params);
+    return hasVideoMediaType(bid)
+      ? hasMandatoryVideoParams(bid)
+      : hasMandatoryDisplayParams(bid);
   },
 
   /**
@@ -137,12 +245,15 @@ export const spec = {
    */
   buildRequests(validBidRequests, bidderRequest) {
     const payload = {
-      url: bidderRequest.refererInfo.referer,
+      url: bidderRequest.refererInfo.page,
       publisherToken: validBidRequests[0].params.publisherId,
       cmp: !!bidderRequest.gdprConsent,
       timeout: bidderRequest.timeout,
       version: '$prebid.version$',
-      bidRequests: buildBidRequests(validBidRequests)
+      connectionType: getConnectionType(),
+      auctionStart: bidderRequest.auctionStart || Date.now(),
+      ttfb: ttfb(),
+      bidRequests: _map(validBidRequests, buildBidRequest),
     };
 
     if (payload.cmp) {
@@ -150,13 +261,37 @@ export const spec = {
       if (gdprApplies !== undefined) payload['ga'] = gdprApplies;
       payload['cd'] = bidderRequest.gdprConsent.consentString;
     }
+    if (bidderRequest.uspConsent) {
+      payload['uspConsent'] = bidderRequest.uspConsent;
+    }
 
-    const payloadString = JSON.stringify(payload)
+    if (validBidRequests[0].schain) {
+      payload.schain = validBidRequests[0].schain;
+    }
+
+    let coppa = config.getConfig('coppa');
+    if (coppa) {
+      payload.coppa = coppa;
+    }
+
+    if (bidderRequest.gppConsent) {
+      payload.gppConsent = {
+        gppString: bidderRequest.gppConsent.gppString,
+        applicableSections: bidderRequest.gppConsent.applicableSections
+      }
+    } else if (bidderRequest.ortb2?.regs?.gpp) {
+      payload.gppConsent = {
+        gppString: bidderRequest.ortb2.regs.gpp,
+        applicableSections: bidderRequest.ortb2.regs.gpp_sid
+      }
+    }
+
+    const payloadString = JSON.stringify(payload);
     return {
       method: 'POST',
       url: SEEDTAG_SSP_ENDPOINT,
-      data: payloadString
-    }
+      data: payloadString,
+    };
   },
 
   /**
@@ -165,11 +300,11 @@ export const spec = {
    * @param {ServerResponse} serverResponse A successful response from the server.
    * @return {Bid[]} An array of bids which were nested inside the server.
    */
-  interpretResponse: function(serverResponse) {
+  interpretResponse: function (serverResponse) {
     const serverBody = serverResponse.body;
-    if (serverBody && serverBody.bids && utils.isArray(serverBody.bids)) {
-      return utils._map(serverBody.bids, function(bid) {
-        return buildBid(bid);
+    if (serverBody && serverBody.bids && isArray(serverBody.bids)) {
+      return _map(serverBody.bids, function (bid) {
+        return buildBidResponse(bid);
       });
     } else {
       return [];
@@ -198,8 +333,18 @@ export const spec = {
    * @param {data} Containing timeout specific data
    */
   onTimeout(data) {
-    getTimeoutUrl(data);
-    utils.triggerPixel(SEEDTAG_SSP_ONTIMEOUT_ENDPOINT);
-  }
-}
+    const url = getTimeoutUrl(data);
+    triggerPixel(url);
+  },
+
+  /**
+   * Function to call when the adapter wins the auction
+   * @param {bid} Bid information received from the server
+   */
+  onBidWon: function (bid) {
+    if (bid && bid.nurl) {
+      triggerPixel(bid.nurl);
+    }
+  },
+};
 registerBidder(spec);

@@ -1,63 +1,137 @@
-import * as utils from '../src/utils.js';
-import { registerBidder } from '../src/adapters/bidderFactory.js';
-import { BANNER } from '../src/mediaTypes.js';
+import {_each, deepAccess, parseSizesInput, parseUrl, uniques, isFn} from '../src/utils.js';
+import {registerBidder} from '../src/adapters/bidderFactory.js';
+import {BANNER, VIDEO} from '../src/mediaTypes.js';
+import {getStorageManager} from '../src/storageManager.js';
+import {bidderSettings} from '../src/bidderSettings.js';
+import {config} from '../src/config.js';
 
+const GVLID = 744;
 const DEFAULT_SUB_DOMAIN = 'prebid';
 const BIDDER_CODE = 'vidazoo';
 const BIDDER_VERSION = '1.0.0';
 const CURRENCY = 'USD';
 const TTL_SECONDS = 60 * 5;
-const INTERNAL_SYNC_TYPE = {
-  IFRAME: 'iframe',
-  IMAGE: 'img'
-};
-const EXTERNAL_SYNC_TYPE = {
-  IFRAME: 'iframe',
-  IMAGE: 'image'
-};
-export const SUPPORTED_ID_SYSTEMS = {
-  'britepoolid': 1,
-  'criteoId': 1,
-  'digitrustid': 1,
-  'id5id': 1,
-  'idl_env': 1,
-  'lipb': 1,
-  'netId': 1,
-  'parrableid': 1,
-  'pubcid': 1,
-  'tdid': 1,
-};
+const DEAL_ID_EXPIRY = 1000 * 60 * 15;
+const UNIQUE_DEAL_ID_EXPIRY = 1000 * 60 * 60;
+const SESSION_ID_KEY = 'vidSid';
+const OPT_CACHE_KEY = 'vdzwopt';
+export const webSessionId = 'wsid_' + parseInt(Date.now() * Math.random());
+const storage = getStorageManager({bidderCode: BIDDER_CODE});
+
+function getTopWindowQueryParams() {
+  try {
+    const parsedUrl = parseUrl(window.top.document.URL, {decodeSearchAsString: true});
+    return parsedUrl.search;
+  } catch (e) {
+    return '';
+  }
+}
 
 export function createDomain(subDomain = DEFAULT_SUB_DOMAIN) {
   return `https://${subDomain}.cootlogix.com`;
 }
 
-function isBidRequestValid(bid) {
-  const params = bid.params || {};
-  return !!(params.cId && params.pId);
+export function extractCID(params) {
+  return params.cId || params.CID || params.cID || params.CId || params.cid || params.ciD || params.Cid || params.CiD;
 }
 
-function buildRequest(bid, topWindowUrl, sizes, bidderRequest) {
-  const { params, bidId, userId, adUnitCode } = bid;
-  const { bidFloor, cId, pId, ext, subDomain } = params;
+export function extractPID(params) {
+  return params.pId || params.PID || params.pID || params.PId || params.pid || params.piD || params.Pid || params.PiD;
+}
+
+export function extractSubDomain(params) {
+  return params.subDomain || params.SubDomain || params.Subdomain || params.subdomain || params.SUBDOMAIN || params.subDOMAIN;
+}
+
+function isBidRequestValid(bid) {
+  const params = bid.params || {};
+  return !!(extractCID(params) && extractPID(params));
+}
+
+function buildRequest(bid, topWindowUrl, sizes, bidderRequest, bidderTimeout) {
+  const {
+    params,
+    bidId,
+    userId,
+    adUnitCode,
+    schain,
+    mediaTypes,
+    auctionId,
+    ortb2Imp,
+    bidderRequestId,
+    bidRequestsCount,
+    bidderRequestsCount,
+    bidderWinsCount
+  } = bid;
+  const {ext} = params;
+  let {bidFloor} = params;
   const hashUrl = hashCode(topWindowUrl);
   const dealId = getNextDealId(hashUrl);
+  const uniqueDealId = getUniqueDealId(hashUrl);
+  const sId = getVidazooSessionId();
+  const cId = extractCID(params);
+  const pId = extractPID(params);
+  const subDomain = extractSubDomain(params);
+  const ptrace = getCacheOpt();
+  const isStorageAllowed = bidderSettings.get(BIDDER_CODE, 'storageAllowed');
+
+  const gpid = deepAccess(bid, 'ortb2Imp.ext.gpid', deepAccess(bid, 'ortb2Imp.ext.data.pbadslot', ''));
+  const cat = deepAccess(bidderRequest, 'ortb2.site.cat', []);
+  const pagecat = deepAccess(bidderRequest, 'ortb2.site.pagecat', []);
+
+  if (isFn(bid.getFloor)) {
+    const floorInfo = bid.getFloor({
+      currency: 'USD',
+      mediaType: '*',
+      size: '*'
+    });
+
+    if (floorInfo.currency === 'USD') {
+      bidFloor = floorInfo.floor;
+    }
+  }
 
   let data = {
     url: encodeURIComponent(topWindowUrl),
+    uqs: getTopWindowQueryParams(),
     cb: Date.now(),
     bidFloor: bidFloor,
     bidId: bidId,
+    referrer: bidderRequest.refererInfo.ref,
     adUnitCode: adUnitCode,
     publisherId: pId,
+    sessionId: sId,
     sizes: sizes,
     dealId: dealId,
+    uniqueDealId: uniqueDealId,
     bidderVersion: BIDDER_VERSION,
     prebidVersion: '$prebid.version$',
-    res: `${screen.width}x${screen.height}`
+    res: `${screen.width}x${screen.height}`,
+    schain: schain,
+    mediaTypes: mediaTypes,
+    ptrace: ptrace,
+    isStorageAllowed: isStorageAllowed,
+    gpid: gpid,
+    cat: cat,
+    pagecat: pagecat,
+    // TODO: fix auctionId leak: https://github.com/prebid/Prebid.js/issues/9781
+    auctionId: auctionId,
+    transactionId: ortb2Imp?.ext?.tid,
+    bidderRequestId: bidderRequestId,
+    bidRequestsCount: bidRequestsCount,
+    bidderRequestsCount: bidderRequestsCount,
+    bidderWinsCount: bidderWinsCount,
+    bidderTimeout: bidderTimeout,
+    webSessionId: webSessionId
   };
 
   appendUserIdsToRequestPayload(data, userId);
+
+  const sua = deepAccess(bidderRequest, 'ortb2.device.sua');
+
+  if (sua) {
+    data.sua = sua;
+  }
 
   if (bidderRequest.gdprConsent) {
     if (bidderRequest.gdprConsent.consentString) {
@@ -68,15 +142,24 @@ function buildRequest(bid, topWindowUrl, sizes, bidderRequest) {
     }
   }
   if (bidderRequest.uspConsent) {
-    data.usPrivacy = bidderRequest.uspConsent
+    data.usPrivacy = bidderRequest.uspConsent;
   }
+
+  if (bidderRequest.gppConsent) {
+    data.gppString = bidderRequest.gppConsent.gppString;
+    data.gppSid = bidderRequest.gppConsent.applicableSections;
+  } else if (bidderRequest.ortb2?.regs?.gpp) {
+    data.gppString = bidderRequest.ortb2.regs.gpp;
+    data.gppSid = bidderRequest.ortb2.regs.gpp_sid;
+  }
+
   const dto = {
     method: 'POST',
     url: `${createDomain(subDomain)}/prebid/multi/${cId}`,
     data: data
   };
 
-  utils._each(ext, (value, key) => {
+  _each(ext, (value, key) => {
     dto.data['ext.' + key] = value;
   });
 
@@ -85,30 +168,35 @@ function buildRequest(bid, topWindowUrl, sizes, bidderRequest) {
 
 function appendUserIdsToRequestPayload(payloadRef, userIds) {
   let key;
-  utils._each(userIds, (userId, idSystemProviderName) => {
-    if (SUPPORTED_ID_SYSTEMS[idSystemProviderName]) {
-      key = `uid.${idSystemProviderName}`;
-
-      switch (idSystemProviderName) {
-        case 'digitrustid':
-          payloadRef[key] = utils.deepAccess(userId, 'data.id');
-          break;
-        case 'lipb':
-          payloadRef[key] = userId.lipbid;
-          break;
-        default:
-          payloadRef[key] = userId;
-      }
+  _each(userIds, (userId, idSystemProviderName) => {
+    key = `uid.${idSystemProviderName}`;
+    switch (idSystemProviderName) {
+      case 'digitrustid':
+        payloadRef[key] = deepAccess(userId, 'data.id');
+        break;
+      case 'lipb':
+        payloadRef[key] = userId.lipbid;
+        break;
+      case 'parrableId':
+        payloadRef[key] = userId.eid;
+        break;
+      case 'id5id':
+        payloadRef[key] = userId.uid;
+        break;
+      default:
+        payloadRef[key] = userId;
     }
   });
 }
 
 function buildRequests(validBidRequests, bidderRequest) {
-  const topWindowUrl = bidderRequest.refererInfo.referer;
+  // TODO: does the fallback make sense here?
+  const topWindowUrl = bidderRequest.refererInfo.page || bidderRequest.refererInfo.topmostLocation;
+  const bidderTimeout = config.getConfig('bidderTimeout');
   const requests = [];
   validBidRequests.forEach(validBidRequest => {
-    const sizes = utils.parseSizesInput(validBidRequest.sizes);
-    const request = buildRequest(validBidRequest, topWindowUrl, sizes, bidderRequest);
+    const sizes = parseSizesInput(validBidRequest.sizes);
+    const request = buildRequest(validBidRequest, topWindowUrl, sizes, bidderRequest, bidderTimeout);
     requests.push(request);
   });
   return requests;
@@ -118,18 +206,30 @@ function interpretResponse(serverResponse, request) {
   if (!serverResponse || !serverResponse.body) {
     return [];
   }
-  const { bidId } = request.data;
-  const { results } = serverResponse.body;
+  const {bidId} = request.data;
+  const {results} = serverResponse.body;
 
   let output = [];
 
   try {
     results.forEach(result => {
-      const { creativeId, ad, price, exp, width, height, currency } = result;
+      const {
+        creativeId,
+        ad,
+        price,
+        exp,
+        width,
+        height,
+        currency,
+        advertiserDomains,
+        metaData,
+        mediaType = BANNER
+      } = result;
       if (!ad || !price) {
         return;
       }
-      output.push({
+
+      const response = {
         requestId: bidId,
         cpm: price,
         width: width,
@@ -138,8 +238,31 @@ function interpretResponse(serverResponse, request) {
         currency: currency || CURRENCY,
         netRevenue: true,
         ttl: exp || TTL_SECONDS,
-        ad: ad
-      })
+      };
+
+      if (metaData) {
+        Object.assign(response, {
+          meta: metaData
+        })
+      } else {
+        Object.assign(response, {
+          meta: {
+            advertiserDomains: advertiserDomains || []
+          }
+        })
+      }
+
+      if (mediaType === BANNER) {
+        Object.assign(response, {
+          ad: ad,
+        });
+      } else {
+        Object.assign(response, {
+          vastXml: ad,
+          mediaType: VIDEO
+        });
+      }
+      output.push(response);
     });
     return output;
   } catch (e) {
@@ -147,84 +270,120 @@ function interpretResponse(serverResponse, request) {
   }
 }
 
-function getUserSyncs(syncOptions, responses) {
-  const { iframeEnabled, pixelEnabled } = syncOptions;
+function getUserSyncs(syncOptions, responses, gdprConsent = {}, uspConsent = '') {
+  let syncs = [];
+  const {iframeEnabled, pixelEnabled} = syncOptions;
+  const {gdprApplies, consentString = ''} = gdprConsent;
 
+  const cidArr = responses.filter(resp => deepAccess(resp, 'body.cid')).map(resp => resp.body.cid).filter(uniques);
+  const params = `?cid=${encodeURIComponent(cidArr.join(','))}&gdpr=${gdprApplies ? 1 : 0}&gdpr_consent=${encodeURIComponent(consentString || '')}&us_privacy=${encodeURIComponent(uspConsent || '')}`
   if (iframeEnabled) {
-    return [{
+    syncs.push({
       type: 'iframe',
-      url: 'https://static.cootlogix.com/basev/sync/user_sync.html'
-    }];
-  }
-
-  if (pixelEnabled) {
-    const lookup = {};
-    const syncs = [];
-    responses.forEach(response => {
-      const { body } = response;
-      const results = body ? body.results || [] : [];
-      results.forEach(result => {
-        (result.cookies || []).forEach(cookie => {
-          if (cookie.type === INTERNAL_SYNC_TYPE.IMAGE) {
-            if (pixelEnabled && !lookup[cookie.src]) {
-              syncs.push({
-                type: EXTERNAL_SYNC_TYPE.IMAGE,
-                url: cookie.src
-              });
-            }
-          }
-        });
-      });
+      url: `https://sync.cootlogix.com/api/sync/iframe/${params}`
     });
-    return syncs;
   }
-
-  return [];
+  if (pixelEnabled) {
+    syncs.push({
+      type: 'image',
+      url: `https://sync.cootlogix.com/api/sync/image/${params}`
+    });
+  }
+  return syncs;
 }
 
-function hashCode(s, prefix = '_') {
+export function hashCode(s, prefix = '_') {
   const l = s.length;
   let h = 0
   let i = 0;
   if (l > 0) {
-    while (i < l) { h = (h << 5) - h + s.charCodeAt(i++) | 0; }
+    while (i < l) {
+      h = (h << 5) - h + s.charCodeAt(i++) | 0;
+    }
   }
   return prefix + h;
 }
 
-function getNextDealId(key) {
+export function getNextDealId(key, expiry = DEAL_ID_EXPIRY) {
   try {
-    const currentValue = Number(getStorageItem(key) || 0);
+    const data = getStorageItem(key);
+    let currentValue = 0;
+    let timestamp;
+
+    if (data && data.value && Date.now() - data.created < expiry) {
+      currentValue = data.value;
+      timestamp = data.created;
+    }
+
     const nextValue = currentValue + 1;
-    setStorageItem(key, nextValue);
+    setStorageItem(key, nextValue, timestamp);
     return nextValue;
   } catch (e) {
     return 0;
   }
 }
 
-function getStorage() {
-  return window['sessionStorage'];
+export function getUniqueDealId(key, expiry = UNIQUE_DEAL_ID_EXPIRY) {
+  const storageKey = `u_${key}`;
+  const now = Date.now();
+  const data = getStorageItem(storageKey);
+  let uniqueId;
+
+  if (!data || !data.value || now - data.created > expiry) {
+    uniqueId = `${key}_${now.toString()}`;
+    setStorageItem(storageKey, uniqueId);
+  } else {
+    uniqueId = data.value;
+  }
+
+  return uniqueId;
 }
 
-function getStorageItem(key) {
+export function getVidazooSessionId() {
+  return getStorageItem(SESSION_ID_KEY) || '';
+}
+
+export function getCacheOpt() {
+  let data = storage.getDataFromLocalStorage(OPT_CACHE_KEY);
+  if (!data) {
+    data = String(Date.now());
+    storage.setDataInLocalStorage(OPT_CACHE_KEY, data);
+  }
+
+  return data;
+}
+
+export function getStorageItem(key) {
   try {
-    return getStorage().getItem(key);
+    return tryParseJSON(storage.getDataFromLocalStorage(key));
   } catch (e) {
-    return null;
+  }
+
+  return null;
+}
+
+export function setStorageItem(key, value, timestamp) {
+  try {
+    const created = timestamp || Date.now();
+    const data = JSON.stringify({value, created});
+    storage.setDataInLocalStorage(key, data);
+  } catch (e) {
   }
 }
 
-function setStorageItem(key, value) {
+export function tryParseJSON(value) {
   try {
-    getStorage().setItem(key, String(value));
-  } catch (e) { }
+    return JSON.parse(value);
+  } catch (e) {
+    return value;
+  }
 }
 
 export const spec = {
   code: BIDDER_CODE,
   version: BIDDER_VERSION,
-  supportedMediaTypes: [BANNER],
+  gvlid: GVLID,
+  supportedMediaTypes: [BANNER, VIDEO],
   isBidRequestValid,
   buildRequests,
   interpretResponse,

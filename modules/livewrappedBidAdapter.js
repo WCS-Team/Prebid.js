@@ -1,19 +1,20 @@
-import * as utils from '../src/utils.js';
-import { registerBidder } from '../src/adapters/bidderFactory.js';
-import { config } from '../src/config.js';
-import find from 'core-js-pure/features/array/find.js';
-import { BANNER, NATIVE } from '../src/mediaTypes.js';
-import { getStorageManager } from '../src/storageManager.js';
-
-export const storage = getStorageManager();
+import {deepAccess, getWindowTop, isSafariBrowser, mergeDeep, isFn, isPlainObject} from '../src/utils.js';
+import {registerBidder} from '../src/adapters/bidderFactory.js';
+import {config} from '../src/config.js';
+import {find} from '../src/polyfill.js';
+import {BANNER, NATIVE, VIDEO} from '../src/mediaTypes.js';
+import {getStorageManager} from '../src/storageManager.js';
+import { convertOrtbRequestToProprietaryNative } from '../src/native.js';
 
 const BIDDER_CODE = 'livewrapped';
+export const storage = getStorageManager({bidderCode: BIDDER_CODE});
 export const URL = 'https://lwadm.com/ad';
-const VERSION = '1.3';
+const VERSION = '1.4';
 
 export const spec = {
   code: BIDDER_CODE,
-  supportedMediaTypes: [BANNER, NATIVE],
+  supportedMediaTypes: [BANNER, NATIVE, VIDEO],
+  gvlid: 919,
 
   /**
    * Determines whether or not the given bid request is valid.
@@ -46,6 +47,9 @@ export const spec = {
    * @return ServerRequest Info describing the request to the server.
    */
   buildRequests: function(bidRequests, bidderRequest) {
+    // convert Native ORTB definition to old-style prebid native definition
+    bidRequests = convertOrtbRequestToProprietaryNative(bidRequests);
+
     const userId = find(bidRequests, hasUserId);
     const pubcid = find(bidRequests, hasPubcid);
     const publisherId = find(bidRequests, hasPublisherId);
@@ -59,12 +63,21 @@ export const spec = {
     const bundle = find(bidRequests, hasBundleParam);
     const tid = find(bidRequests, hasTidParam);
     const schain = bidRequests[0].schain;
+    let ortb2 = bidderRequest.ortb2;
+    const eids = handleEids(bidRequests);
     bidUrl = bidUrl ? bidUrl.params.bidUrl : URL;
     url = url ? url.params.url : (getAppDomain() || getTopWindowLocation(bidderRequest));
     test = test ? test.params.test : undefined;
-    var adRequests = bidRequests.map(bidToAdRequest);
+    const currency = config.getConfig('currency.adServerCurrency') || 'USD';
+    var adRequests = bidRequests.map(b => bidToAdRequest(b, currency));
+    const adRequestsContainFloors = adRequests.some(r => r.flr !== undefined);
+
+    if (eids) {
+      ortb2 = mergeDeep(mergeDeep({}, ortb2 || {}), eids);
+    }
 
     const payload = {
+      // TODO: fix auctionId leak: https://github.com/prebid/Prebid.js/issues/9781
       auctionId: auctionId ? auctionId.auctionId : undefined,
       publisherId: publisherId ? publisherId.params.publisherId : undefined,
       userId: userId ? userId.params.userId : (pubcid ? pubcid.crumbs.pubcid : undefined),
@@ -80,11 +93,14 @@ export const spec = {
       version: VERSION,
       gdprApplies: bidderRequest.gdprConsent ? bidderRequest.gdprConsent.gdprApplies : undefined,
       gdprConsent: bidderRequest.gdprConsent ? bidderRequest.gdprConsent.consentString : undefined,
-      cookieSupport: !utils.isSafariBrowser() && storage.cookiesAreEnabled(),
+      coppa: getCoppa(),
+      usPrivacy: bidderRequest.uspConsent,
+      cookieSupport: !isSafariBrowser() && storage.cookiesAreEnabled(),
       rcv: getAdblockerRecovered(),
       adRequests: [...adRequests],
-      rtbData: handleEids(bidRequests),
-      schain: schain
+      rtbData: ortb2,
+      schain: schain,
+      flrCur: adRequestsContainFloors ? currency : undefined
     };
 
     if (config.getConfig().debug) {
@@ -115,7 +131,6 @@ export const spec = {
     serverResponse.body.ads.forEach(function(ad) {
       var bidResponse = {
         requestId: ad.bidId,
-        bidderCode: BIDDER_CODE,
         cpm: ad.cpmBid,
         width: ad.width,
         height: ad.height,
@@ -129,7 +144,12 @@ export const spec = {
 
       if (ad.native) {
         bidResponse.native = ad.native;
-        bidResponse.mediaType = NATIVE
+        bidResponse.mediaType = NATIVE;
+      }
+
+      if (ad.video) {
+        bidResponse.mediaType = VIDEO;
+        bidResponse.vastXml = ad.tag;
       }
 
       bidResponses.push(bidResponse);
@@ -206,19 +226,26 @@ function hasPubcid(bid) {
   return !!bid.crumbs && !!bid.crumbs.pubcid;
 }
 
-function bidToAdRequest(bid) {
+function bidToAdRequest(bid, currency) {
   var adRequest = {
     adUnitId: bid.params.adUnitId,
     callerAdUnitId: bid.params.adUnitName || bid.adUnitCode || bid.placementCode,
     bidId: bid.bidId,
-    transactionId: bid.transactionId,
+    transactionId: bid.ortb2Imp?.ext?.tid,
     formats: getSizes(bid).map(sizeToFormat),
+    flr: getBidFloor(bid, currency),
     options: bid.params.options
   };
 
-  adRequest.native = utils.deepAccess(bid, 'mediaTypes.native');
+  if (bid.auc !== undefined) {
+    adRequest.auc = bid.auc;
+  }
 
-  if (adRequest.native && utils.deepAccess(bid, 'mediaTypes.banner')) {
+  adRequest.native = deepAccess(bid, 'mediaTypes.native');
+
+  adRequest.video = deepAccess(bid, 'mediaTypes.video');
+
+  if ((adRequest.native || adRequest.video) && deepAccess(bid, 'mediaTypes.banner')) {
     adRequest.banner = true;
   }
 
@@ -226,7 +253,7 @@ function bidToAdRequest(bid) {
 }
 
 function getSizes(bid) {
-  if (utils.deepAccess(bid, 'mediaTypes.banner.sizes')) {
+  if (deepAccess(bid, 'mediaTypes.banner.sizes')) {
     return bid.mediaTypes.banner.sizes;
   } else if (Array.isArray(bid.sizes) && bid.sizes.length > 0) {
     return bid.sizes;
@@ -241,47 +268,39 @@ function sizeToFormat(size) {
   }
 }
 
+function getBidFloor(bid, currency) {
+  if (!isFn(bid.getFloor)) {
+    return undefined;
+  }
+
+  const floor = bid.getFloor({
+    currency: currency,
+    mediaType: '*',
+    size: '*'
+  });
+
+  return isPlainObject(floor) && !isNaN(floor.floor) && floor.currency == currency
+    ? floor.floor
+    : undefined;
+}
+
 function getAdblockerRecovered() {
   try {
-    return utils.getWindowTop().I12C && utils.getWindowTop().I12C.Morph === 1;
+    return getWindowTop().I12C && getWindowTop().I12C.Morph === 1;
   } catch (e) {}
 }
 
-function AddExternalUserId(eids, value, source, atype, rtiPartner) {
-  if (utils.isStr(value)) {
-    var eid = {
-      source,
-      uids: [{
-        id: value,
-        atype
-      }]
-    };
-
-    if (rtiPartner) {
-      eid.uids[0] = {ext: {rtiPartner}};
-    }
-
-    eids.push(eid);
-  }
-}
-
 function handleEids(bidRequests) {
-  let eids = [];
   const bidRequest = bidRequests[0];
-  if (bidRequest && bidRequest.userId) {
-    AddExternalUserId(eids, utils.deepAccess(bidRequest, `userId.pubcid`), 'pubcommon', 1); // Also add this to eids
-    AddExternalUserId(eids, utils.deepAccess(bidRequest, `userId.id5id`), 'id5-sync.com', 1);
-  }
-  if (eids.length > 0) {
-    return {user: {ext: {eids}}};
+  if (bidRequest && bidRequest.userIdAsEids) {
+    return {user: {ext: {eids: bidRequest.userIdAsEids}}};
   }
 
   return undefined;
 }
 
 function getTopWindowLocation(bidderRequest) {
-  let url = bidderRequest && bidderRequest.refererInfo && bidderRequest.refererInfo.referer;
-  return config.getConfig('pageUrl') || url;
+  return bidderRequest?.refererInfo?.page;
 }
 
 function getAppBundle() {
@@ -303,21 +322,18 @@ function getDeviceIfa() {
 }
 
 function getDeviceWidth() {
-  let device = config.getConfig('device');
-  if (typeof device === 'object' && device.width) {
-    return device.width;
-  }
-
-  return window.innerWidth;
+  const device = config.getConfig('device') || {};
+  return device.w || window.innerWidth;
 }
 
 function getDeviceHeight() {
-  let device = config.getConfig('device');
-  if (typeof device === 'object' && device.height) {
-    return device.height;
-  }
-
-  return window.innerHeight;
+  const device = config.getConfig('device') || {};
+  return device.h || window.innerHeight;
 }
 
+function getCoppa() {
+  if (typeof config.getConfig('coppa') === 'boolean') {
+    return config.getConfig('coppa');
+  }
+}
 registerBidder(spec);

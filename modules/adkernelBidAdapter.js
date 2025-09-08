@@ -1,9 +1,27 @@
-import * as utils from '../src/utils.js';
+import {
+  _each,
+  cleanObj,
+  contains,
+  createTrackPixelHtml,
+  deepAccess,
+  deepSetValue,
+  getAdUnitSizes,
+  getDefinedParams,
+  getDNT,
+  isArray,
+  isArrayOfNums,
+  isEmpty,
+  isNumber,
+  isPlainObject,
+  isStr,
+  mergeDeep,
+  parseGPTSingleSizeArrayToRtbSize
+} from '../src/utils.js';
 import {BANNER, NATIVE, VIDEO} from '../src/mediaTypes.js';
 import {registerBidder} from '../src/adapters/bidderFactory.js';
-import find from 'core-js-pure/features/array/find.js';
-import includes from 'core-js-pure/features/array/includes.js';
+import {find} from '../src/polyfill.js';
 import {config} from '../src/config.js';
+import {convertOrtbRequestToProprietaryNative} from '../src/native.js';
 
 /*
  * In case you're AdKernel whitelable platform's client who needs branded adapter to
@@ -11,17 +29,19 @@ import {config} from '../src/config.js';
  *
  * Please contact prebid@adkernel.com and we'll add your adapter as an alias.
  */
-
-const VIDEO_TARGETING = Object.freeze(['mimes', 'minduration', 'maxduration', 'protocols',
-  'startdelay', 'linearity', 'boxingallowed', 'playbackmethod', 'delivery',
-  'pos', 'api', 'ext']);
-const VERSION = '1.5';
+const VIDEO_PARAMS = ['pos', 'context', 'placement', 'api', 'mimes', 'protocols', 'playbackmethod', 'minduration', 'maxduration',
+  'startdelay', 'linearity', 'skip', 'skipmin', 'skipafter', 'minbitrate', 'maxbitrate', 'delivery', 'playbackend', 'boxingallowed'];
+const VIDEO_FPD = ['battr', 'pos'];
+const NATIVE_FPD = ['battr', 'api'];
+const BANNER_FPD = ['btype', 'battr', 'pos', 'api'];
+const VERSION = '1.6';
 const SYNC_IFRAME = 1;
 const SYNC_IMAGE = 2;
 const SYNC_TYPES = Object.freeze({
   1: 'iframe',
   2: 'image'
 });
+const GVLID = 14;
 
 const NATIVE_MODEL = [
   {name: 'title', assetType: 'title'},
@@ -50,9 +70,38 @@ const NATIVE_INDEX = NATIVE_MODEL.reduce((acc, val, idx) => {
  * Adapter for requesting bids from AdKernel white-label display platform
  */
 export const spec = {
-
   code: 'adkernel',
-  aliases: ['headbidding', 'adsolut', 'oftmediahb', 'audiencemedia', 'waardex_ak', 'roqoon'],
+  gvlid: GVLID,
+  aliases: [
+    {code: 'headbidding'},
+    {code: 'adsolut'},
+    {code: 'oftmediahb'},
+    {code: 'audiencemedia'},
+    {code: 'waardex_ak'},
+    {code: 'roqoon'},
+    {code: 'adbite'},
+    {code: 'houseofpubs'},
+    {code: 'torchad'},
+    {code: 'stringads'},
+    {code: 'bcm'},
+    {code: 'engageadx'},
+    {code: 'converge', gvlid: 248},
+    {code: 'adomega'},
+    {code: 'denakop'},
+    {code: 'rtbanalytica'},
+    {code: 'unibots'},
+    {code: 'ergadx'},
+    {code: 'turktelekom'},
+    {code: 'felixads'},
+    {code: 'motionspots'},
+    {code: 'sonic_twist'},
+    {code: 'displayioads'},
+    {code: 'rtbdemand_com'},
+    {code: 'bidbuddy'},
+    {code: 'adliveconnect'},
+    {code: 'didnadisplay'},
+    {code: 'qortex'}
+  ],
   supportedMediaTypes: [BANNER, VIDEO, NATIVE],
 
   /**
@@ -77,16 +126,19 @@ export const spec = {
    * @returns {ServerRequest[]}
    */
   buildRequests: function (bidRequests, bidderRequest) {
-    let impDispatch = dispatchImps(bidRequests, bidderRequest.refererInfo);
-    const requests = [];
-    Object.keys(impDispatch).forEach(host => {
-      Object.keys(impDispatch[host]).forEach(zoneId => {
-        const request = buildRtbRequest(impDispatch[host][zoneId], bidderRequest);
-        requests.push({
-          method: 'POST',
-          url: `https://${host}/hb?zone=${zoneId}&v=${VERSION}`,
-          data: JSON.stringify(request)
-        });
+    // convert Native ORTB definition to old-style prebid native definition
+    bidRequests = convertOrtbRequestToProprietaryNative(bidRequests);
+
+    let impGroups = groupImpressionsByHostZone(bidRequests, bidderRequest.refererInfo);
+    let requests = [];
+    let schain = bidRequests[0].schain;
+    _each(impGroups, impGroup => {
+      let {host, zoneId, imps} = impGroup;
+      const request = buildRtbRequest(imps, bidderRequest, schain);
+      requests.push({
+        method: 'POST',
+        url: `https://${host}/hb?zone=${zoneId}&v=${VERSION}`,
+        data: JSON.stringify(request)
       });
     });
     return requests;
@@ -115,7 +167,7 @@ export const spec = {
         requestId: rtbBid.impid,
         cpm: rtbBid.price,
         creativeId: rtbBid.crid,
-        currency: 'USD',
+        currency: response.cur || 'USD',
         ttl: 360,
         netRevenue: true
       };
@@ -133,6 +185,27 @@ export const spec = {
         prBid.mediaType = NATIVE;
         prBid.native = buildNativeAd(JSON.parse(rtbBid.adm));
       }
+      if (isStr(rtbBid.dealid)) {
+        prBid.dealId = rtbBid.dealid;
+      }
+      if (isArray(rtbBid.adomain)) {
+        deepSetValue(prBid, 'meta.advertiserDomains', rtbBid.adomain);
+      }
+      if (isArray(rtbBid.cat)) {
+        deepSetValue(prBid, 'meta.secondaryCatIds', rtbBid.cat);
+      }
+      if (isPlainObject(rtbBid.ext)) {
+        if (isNumber(rtbBid.ext.advertiser_id)) {
+          deepSetValue(prBid, 'meta.advertiserId', rtbBid.ext.advertiser_id);
+        }
+        if (isStr(rtbBid.ext.advertiser_name)) {
+          deepSetValue(prBid, 'meta.advertiserName', rtbBid.ext.advertiser_name);
+        }
+        if (isStr(rtbBid.ext.agency_name)) {
+          deepSetValue(prBid, 'meta.agencyName', rtbBid.ext.agency_name);
+        }
+      }
+
       return prBid;
     });
   },
@@ -161,17 +234,31 @@ registerBidder(spec);
  * @param bidRequests {BidRequest[]}
  * @param refererInfo {refererInfo}
  */
-function dispatchImps(bidRequests, refererInfo) {
-  let secure = (refererInfo && refererInfo.referer.indexOf('https:') === 0);
-  return bidRequests.map(bidRequest => buildImp(bidRequest, secure))
-    .reduce((acc, curr, index) => {
-      let bidRequest = bidRequests[index];
-      let {zoneId, host} = bidRequest.params;
-      acc[host] = acc[host] || {};
-      acc[host][zoneId] = acc[host][zoneId] || [];
-      acc[host][zoneId].push(curr);
-      return acc;
-    }, {});
+function groupImpressionsByHostZone(bidRequests, refererInfo) {
+  let secure = (refererInfo && refererInfo.page?.indexOf('https:') === 0);
+  return Object.values(
+    bidRequests.map(bidRequest => buildImp(bidRequest, secure))
+      .reduce((acc, curr, index) => {
+        let bidRequest = bidRequests[index];
+        let {zoneId, host} = bidRequest.params;
+        let key = `${host}_${zoneId}`;
+        acc[key] = acc[key] || {host: host, zoneId: zoneId, imps: []};
+        acc[key].imps.push(curr);
+        return acc;
+      }, {})
+  );
+}
+
+function getBidFloor(bid, mediaType, sizes) {
+  var floor;
+  var size = sizes.length === 1 ? sizes[0] : '*';
+  if (typeof bid.getFloor === 'function') {
+    const floorInfo = bid.getFloor({currency: 'USD', mediaType, size});
+    if (typeof floorInfo === 'object' && floorInfo.currency === 'USD' && !isNaN(parseFloat(floorInfo.floor))) {
+      floor = parseFloat(floorInfo.floor);
+    }
+  }
+  return floor;
 }
 
 /**
@@ -184,27 +271,43 @@ function buildImp(bidRequest, secure) {
     'id': bidRequest.bidId,
     'tagid': bidRequest.adUnitCode
   };
+  var mediaType;
+  var sizes = [];
 
-  if (utils.deepAccess(bidRequest, `mediaTypes.banner`)) {
-    let sizes = utils.getAdUnitSizes(bidRequest);
+  if (deepAccess(bidRequest, 'mediaTypes.banner')) {
+    sizes = getAdUnitSizes(bidRequest);
     imp.banner = {
-      format: sizes.map(wh => utils.parseGPTSingleSizeArrayToRtbSize(wh)),
+      format: sizes.map(wh => parseGPTSingleSizeArrayToRtbSize(wh)),
       topframe: 0
     };
-  } else if (utils.deepAccess(bidRequest, 'mediaTypes.video')) {
-    let sizes = bidRequest.mediaTypes.video.playerSize || [];
-    imp.video = utils.parseGPTSingleSizeArrayToRtbSize(sizes[0]) || {};
-    if (bidRequest.params.video) {
-      Object.keys(bidRequest.params.video)
-        .filter(key => includes(VIDEO_TARGETING, key))
-        .forEach(key => imp.video[key] = bidRequest.params.video[key]);
+    populateImpFpd(imp.banner, bidRequest, BANNER_FPD);
+    mediaType = BANNER;
+  } else if (deepAccess(bidRequest, 'mediaTypes.video')) {
+    let video = deepAccess(bidRequest, 'mediaTypes.video');
+    imp.video = getDefinedParams(video, VIDEO_PARAMS);
+    populateImpFpd(imp.video, bidRequest, VIDEO_FPD);
+    if (video.playerSize) {
+      sizes = video.playerSize[0];
+      imp.video = Object.assign(imp.video, parseGPTSingleSizeArrayToRtbSize(sizes) || {});
+    } else if (video.w && video.h) {
+      imp.video.w = video.w;
+      imp.video.h = video.h;
     }
-  } else if (utils.deepAccess(bidRequest, 'mediaTypes.native')) {
+    mediaType = VIDEO;
+  } else if (deepAccess(bidRequest, 'mediaTypes.native')) {
     let nativeRequest = buildNativeRequest(bidRequest.mediaTypes.native);
     imp.native = {
       ver: '1.1',
       request: JSON.stringify(nativeRequest)
-    }
+    };
+    populateImpFpd(imp.native, bidRequest, NATIVE_FPD);
+    mediaType = NATIVE;
+  } else {
+    throw new Error('Unsupported bid received');
+  }
+  let floor = getBidFloor(bidRequest, mediaType, sizes);
+  if (floor) {
+    imp.bidfloor = floor;
   }
   if (secure) {
     imp.secure = 1;
@@ -230,7 +333,7 @@ function buildNativeRequest(nativeReq) {
     if (desc.assetType === 'img') {
       assetRoot[desc.assetType] = buildImageAsset(desc, v);
     } else if (desc.assetType === 'data') {
-      assetRoot.data = utils.cleanObj({type: desc.type, len: v.len});
+      assetRoot.data = cleanObj({type: desc.type, len: v.len});
     } else if (desc.assetType === 'title') {
       assetRoot.title = {len: v.len || 90};
     } else {
@@ -239,6 +342,19 @@ function buildNativeRequest(nativeReq) {
     request.assets.push(assetRoot);
   }
   return request;
+}
+
+/**
+ * Populate impression-level FPD from bid request
+ * @param target {Object}
+ * @param bidRequest {BidRequest}
+ * @param props {String[]}
+ */
+function populateImpFpd(target, bidRequest, props) {
+  if (bidRequest.ortb2Imp === undefined) {
+    return;
+  }
+  Object.assign(target, getDefinedParams(bidRequest.ortb2Imp, props));
 }
 
 /**
@@ -254,7 +370,7 @@ function buildImageAsset(desc, val) {
     img.wmin = val.aspect_ratios[0].min_width;
     img.hmin = val.aspect_ratios[0].min_height;
   }
-  return utils.cleanObj(img);
+  return cleanObj(img);
 }
 
 /**
@@ -267,9 +383,9 @@ function isSyncMethodAllowed(syncRule, bidderCode) {
   if (!syncRule) {
     return false;
   }
-  let bidders = utils.isArray(syncRule.bidders) ? syncRule.bidders : [bidderCode];
+  let bidders = isArray(syncRule.bidders) ? syncRule.bidders : [bidderCode];
   let rule = syncRule.filter === 'include';
-  return utils.contains(bidders, bidderCode) === rule;
+  return contains(bidders, bidderCode) === rule;
 }
 
 /**
@@ -290,44 +406,141 @@ function getAllowedSyncMethod(bidderCode) {
 }
 
 /**
- * Builds complete rtb request
- * @param imps {Object} Collection of rtb impressions
- * @param bidderRequest {BidderRequest}
- * @return {Object} Complete rtb request
+ * Create device object from fpd and host-collected data
+ * @param fpd {Object}
+ * @returns {{device: Object}}
  */
-function buildRtbRequest(imps, bidderRequest) {
-  let {bidderCode, gdprConsent, auctionId, refererInfo, timeout, uspConsent} = bidderRequest;
-
-  let req = {
-    'id': auctionId,
-    'imp': imps,
-    'site': createSite(refererInfo),
-    'at': 1,
-    'device': {
-      'ip': 'caller',
-      'ua': 'caller',
-      'js': 1,
-      'language': getLanguage()
-    },
-    'tmax': parseInt(timeout)
-  };
-  if (utils.getDNT()) {
-    req.device.dnt = 1;
+function makeDevice(fpd) {
+  let device = mergeDeep({
+    'ip': 'caller',
+    'ipv6': 'caller',
+    'ua': 'caller',
+    'js': 1,
+    'language': getLanguage()
+  }, fpd.device || {});
+  if (getDNT()) {
+    device.dnt = 1;
   }
+  return {device: device};
+}
+
+/**
+ * Create site or app description object
+ * @param bidderRequest {BidderRequest}
+ * @param fpd {Object}
+ * @returns {{site: Object}|{app: Object}}
+ */
+function makeSiteOrApp(bidderRequest, fpd) {
+  let {refererInfo} = bidderRequest;
+  let appConfig = config.getConfig('app');
+  if (isEmpty(appConfig)) {
+    return {site: createSite(refererInfo, fpd)}
+  } else {
+    return {app: appConfig};
+  }
+}
+
+/**
+ * Create user description object
+ * @param bidderRequest {BidderRequest}
+ * @param fpd {Object}
+ * @returns {{user: Object} | undefined}
+ */
+function makeUser(bidderRequest, fpd) {
+  let {gdprConsent} = bidderRequest;
+  let user = fpd.user || {};
+  if (gdprConsent && gdprConsent.consentString !== undefined) {
+    deepSetValue(user, 'ext.consent', gdprConsent.consentString);
+  }
+  let eids = getExtendedUserIds(bidderRequest);
+  if (eids) {
+    deepSetValue(user, 'ext.eids', eids);
+  }
+  if (!isEmpty(user)) { return {user: user}; }
+}
+
+/**
+ * Create privacy regulations object
+ * @param bidderRequest {BidderRequest}
+ * @returns {{regs: Object} | undefined}
+ */
+function makeRegulations(bidderRequest) {
+  let {gdprConsent, uspConsent} = bidderRequest;
+  let regs = {};
   if (gdprConsent) {
     if (gdprConsent.gdprApplies !== undefined) {
-      utils.deepSetValue(req, 'regs.ext.gdpr', ~~gdprConsent.gdprApplies);
-    }
-    if (gdprConsent.consentString !== undefined) {
-      utils.deepSetValue(req, 'user.ext.consent', gdprConsent.consentString);
+      deepSetValue(regs, 'regs.ext.gdpr', ~~gdprConsent.gdprApplies);
     }
   }
   if (uspConsent) {
-    utils.deepSetValue(req, 'regs.ext.us_privacy', uspConsent);
+    deepSetValue(regs, 'regs.ext.us_privacy', uspConsent);
   }
+  if (config.getConfig('coppa')) {
+    deepSetValue(regs, 'regs.coppa', 1);
+  }
+  if (!isEmpty(regs)) {
+    return regs;
+  }
+}
+
+/**
+ * Create top-level request object
+ * @param bidderRequest {BidderRequest}
+ * @param imps {Object} Impressions
+ * @param fpd {Object} First party data
+ * @returns
+ */
+function makeBaseRequest(bidderRequest, imps, fpd) {
+  let {timeout} = bidderRequest;
+  let request = {
+    'id': bidderRequest.bidderRequestId,
+    'imp': imps,
+    'at': 1,
+    'tmax': parseInt(timeout)
+  };
+  if (!isEmpty(fpd.bcat)) {
+    request.bcat = fpd.bcat;
+  }
+  if (!isEmpty(fpd.badv)) {
+    request.badv = fpd.badv;
+  }
+  return request;
+}
+
+/**
+ * Initialize sync capabilities
+ * @param bidderRequest {BidderRequest}
+ */
+function makeSyncInfo(bidderRequest) {
+  let {bidderCode} = bidderRequest;
   let syncMethod = getAllowedSyncMethod(bidderCode);
   if (syncMethod) {
-    utils.deepSetValue(req, 'ext.adk_usersync', syncMethod);
+    let res = {};
+    deepSetValue(res, 'ext.adk_usersync', syncMethod);
+    return res;
+  }
+}
+
+/**
+ * Builds complete rtb request
+ * @param imps {Object} Collection of rtb impressions
+ * @param bidderRequest {BidderRequest}
+ * @param schain {Object=} Supply chain config
+ * @return {Object} Complete rtb request
+ */
+function buildRtbRequest(imps, bidderRequest, schain) {
+  let fpd = bidderRequest.ortb2 || {};
+
+  let req = mergeDeep(
+    makeBaseRequest(bidderRequest, imps, fpd),
+    makeDevice(fpd),
+    makeSiteOrApp(bidderRequest, fpd),
+    makeUser(bidderRequest, fpd),
+    makeRegulations(bidderRequest),
+    makeSyncInfo(bidderRequest)
+  );
+  if (schain) {
+    deepSetValue(req, 'source.ext.schain', schain);
   }
   return req;
 }
@@ -344,20 +557,25 @@ function getLanguage() {
 /**
  * Creates site description object
  */
-function createSite(refInfo) {
-  let url = utils.parseUrl(refInfo.referer);
+function createSite(refInfo, fpd) {
   let site = {
-    'domain': url.hostname,
-    'page': `${url.protocol}://${url.hostname}${url.pathname}`
+    'domain': refInfo.domain,
+    'page': refInfo.page
   };
-  if (self === top && document.referrer) {
-    site.ref = document.referrer;
-  }
-  let keywords = document.getElementsByTagName('meta')['keywords'];
-  if (keywords && keywords.content) {
-    site.keywords = keywords.content;
+  mergeDeep(site, fpd.site);
+  if (refInfo.ref != null) {
+    site.ref = refInfo.ref;
+  } else {
+    delete site.ref;
   }
   return site;
+}
+
+function getExtendedUserIds(bidderRequest) {
+  let eids = deepAccess(bidderRequest, 'bids.0.userIdAsEids');
+  if (isArray(eids)) {
+    return eids;
+  }
 }
 
 /**
@@ -367,7 +585,7 @@ function createSite(refInfo) {
 function formatAdMarkup(bid) {
   let adm = bid.adm;
   if ('nurl' in bid) {
-    adm += utils.createTrackPixelHtml(`${bid.nurl}&px=1`);
+    adm += createTrackPixelHtml(`${bid.nurl}&px=1`);
   }
   return adm;
 }
@@ -377,8 +595,8 @@ function formatAdMarkup(bid) {
  */
 function validateNativeAdUnit(adUnit) {
   return validateNativeImageSize(adUnit.image) && validateNativeImageSize(adUnit.icon) &&
-    !utils.deepAccess(adUnit, 'privacyLink.required') && // not supported yet
-    !utils.deepAccess(adUnit, 'privacyIcon.required'); // not supported yet
+    !deepAccess(adUnit, 'privacyLink.required') && // not supported yet
+    !deepAccess(adUnit, 'privacyIcon.required'); // not supported yet
 }
 
 /**
@@ -389,9 +607,9 @@ function validateNativeImageSize(img) {
     return true;
   }
   if (img.sizes) {
-    return utils.isArrayOfNums(img.sizes, 2);
+    return isArrayOfNums(img.sizes, 2);
   }
-  if (utils.isArray(img.aspect_ratios)) {
+  if (isArray(img.aspect_ratios)) {
     return img.aspect_ratios.length > 0 && img.aspect_ratios[0].min_height && img.aspect_ratios[0].min_width;
   }
   return true;
@@ -408,14 +626,14 @@ function buildNativeAd(nativeResp) {
     javascriptTrackers: jstracker ? [jstracker] : undefined,
     privacyLink: privacy,
   };
-  utils._each(assets, asset => {
+  _each(assets, asset => {
     let assetName = NATIVE_MODEL[asset.id].name;
     let assetType = NATIVE_MODEL[asset.id].assetType;
-    nativeAd[assetName] = asset[assetType].text || asset[assetType].value || utils.cleanObj({
+    nativeAd[assetName] = asset[assetType].text || asset[assetType].value || cleanObj({
       url: asset[assetType].url,
       width: asset[assetType].w,
       height: asset[assetType].h
     });
   });
-  return utils.cleanObj(nativeAd);
+  return cleanObj(nativeAd);
 }

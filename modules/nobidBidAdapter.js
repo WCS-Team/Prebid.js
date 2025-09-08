@@ -1,19 +1,21 @@
-import * as utils from '../src/utils.js';
+import { logInfo, deepAccess, logWarn, isArray, getParameterByName } from '../src/utils.js';
 import { config } from '../src/config.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, VIDEO } from '../src/mediaTypes.js';
 import { getStorageManager } from '../src/storageManager.js';
+import {hasPurpose1Consent} from '../src/utils/gpdr.js';
 
-const storage = getStorageManager();
+const GVLID = 816;
 const BIDDER_CODE = 'nobid';
-window.nobidVersion = '1.2.6';
+const storage = getStorageManager({bidderCode: BIDDER_CODE});
+window.nobidVersion = '1.3.3';
 window.nobid = window.nobid || {};
 window.nobid.bidResponses = window.nobid.bidResponses || {};
 window.nobid.timeoutTotal = 0;
 window.nobid.bidWonTotal = 0;
 window.nobid.refreshCount = 0;
 function log(msg, obj) {
-  utils.logInfo('-NoBid- ' + msg, obj)
+  logInfo('-NoBid- ' + msg, obj)
 }
 function nobidSetCookie(cname, cvalue, hours) {
   var d = new Date();
@@ -28,7 +30,7 @@ function nobidBuildRequests(bids, bidderRequest) {
   var serializeState = function(divIds, siteId, adunits) {
     var filterAdUnitsByIds = function(divIds, adUnits) {
       var filtered = [];
-      if (!divIds || !divIds.length) {
+      if (!divIds.length) {
         filtered = adUnits;
       } else if (adUnits) {
         var a = [];
@@ -78,9 +80,10 @@ function nobidBuildRequests(bids, bidderRequest) {
     }
     var topLocation = function(bidderRequest) {
       var ret = '';
-      if (bidderRequest && bidderRequest.refererInfo && bidderRequest.refererInfo.referer) {
-        ret = bidderRequest.refererInfo.referer;
+      if (bidderRequest?.refererInfo?.page) {
+        ret = bidderRequest.refererInfo.page;
       } else {
+        // TODO: does this fallback make sense here?
         ret = (window.context && window.context.location && window.context.location.href) ? window.context.location.href : document.location.href;
       }
       return encodeURIComponent(ret.replace(/\%/g, ''));
@@ -102,7 +105,24 @@ function nobidBuildRequests(bids, bidderRequest) {
         var height = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
         return `${width}x${height}`;
       } catch (e) {
-        utils.logWarn('Could not parse screen dimensions, error details:', e);
+        logWarn('Could not parse screen dimensions, error details:', e);
+      }
+    }
+    var getEIDs = function(eids) {
+      if (isArray(eids) && eids.length > 0) {
+        let src = [];
+        eids.forEach((eid) => {
+          let ids = [];
+          if (eid.uids) {
+            eid.uids.forEach(value => {
+              ids.push({'id': value.id + ''});
+            });
+          }
+          if (eid.source && ids.length > 0) {
+            src.push({source: eid.source, uids: ids});
+          }
+        });
+        return src;
       }
     }
     var state = {};
@@ -118,12 +138,16 @@ function nobidBuildRequests(bids, bidderRequest) {
     state['ref'] = document.referrer;
     state['gdpr'] = gdprConsent(bidderRequest);
     state['usp'] = uspConsent(bidderRequest);
+    state['pjbdr'] = (bidderRequest && bidderRequest.bidderCode) ? bidderRequest.bidderCode : 'nobid';
     const sch = schain(bids);
     if (sch) state['schain'] = sch;
     const cop = coppa();
     if (cop) state['coppa'] = cop;
+    const eids = getEIDs(deepAccess(bids, '0.userIdAsEids'));
+    if (eids && eids.length > 0) state['eids'] = eids;
+    if (bidderRequest && bidderRequest.ortb2) state['ortb2'] = bidderRequest.ortb2;
     return state;
-  }
+  };
   function newAdunit(adunitObject, adunits) {
     var getAdUnit = function(divid, adunits) {
       for (var i = 0; i < adunits.length; i++) {
@@ -151,6 +175,9 @@ function nobidBuildRequests(bids, bidderRequest) {
     if (adunitObject.div) {
       a.d = adunitObject.div;
     }
+    if (adunitObject.floor) {
+      a.floor = adunitObject.floor;
+    }
     if (adunitObject.targeting) {
       a.g = adunitObject.targeting;
     } else {
@@ -177,6 +204,12 @@ function nobidBuildRequests(bids, bidderRequest) {
     adunits.push(a);
     return adunits;
   }
+  function getFloor (bid) {
+    if (bid && typeof bid.getFloor === 'function' && bid.getFloor().floor) {
+      return bid.getFloor().floor;
+    }
+    return null;
+  }
   if (typeof window.nobid.refreshLimit !== 'undefined') {
     if (window.nobid.refreshLimit < window.nobid.refreshCount) return false;
   }
@@ -198,11 +231,12 @@ function nobidBuildRequests(bids, bidderRequest) {
     var placementId = bid.params['placementId'];
 
     var adType = 'banner';
-    const videoMediaType = utils.deepAccess(bid, 'mediaTypes.video');
-    const context = utils.deepAccess(bid, 'mediaTypes.video.context');
+    const videoMediaType = deepAccess(bid, 'mediaTypes.video');
+    const context = deepAccess(bid, 'mediaTypes.video.context');
     if (bid.mediaType === VIDEO || (videoMediaType && (context === 'instream' || context === 'outstream'))) {
       adType = 'video';
     }
+    const floor = getFloor(bid);
 
     if (siteId) {
       newAdunit({
@@ -211,7 +245,8 @@ function nobidBuildRequests(bids, bidderRequest) {
         siteId: siteId,
         placementId: placementId,
         ad_type: adType,
-        params: bid.params
+        params: bid.params,
+        floor: floor
       },
       adunits);
     }
@@ -270,6 +305,9 @@ function nobidInterpretResponse(response, bidRequest) {
     if (bid.videoCacheKey) {
       bidResponse.videoCacheKey = bid.videoCacheKey;
     }
+    if (bid.meta) {
+      bidResponse.meta = bid.meta;
+    }
 
     bidResponses.push(bidResponse);
   }
@@ -296,19 +334,7 @@ window.addEventListener('message', function (event) {
     if (window.nobid && window.nobid.bidResponses) {
       var bid = window.nobid.bidResponses['' + adId];
       if (bid && bid.adm2) {
-        var markup = null;
-        if (bid.is_combo && bid.adm_combo) {
-          for (var i in bid.adm_combo) {
-            var combo = bid.adm_combo[i];
-            if (!combo.done) {
-              markup = combo.adm;
-              combo.done = true;
-              break;
-            }
-          }
-        } else {
-          markup = bid.adm2;
-        }
+        var markup = bid.adm2;
         if (markup) {
           event.source.postMessage('nbTagRenderer.renderAdInSafeFrame|' + markup, '*');
         }
@@ -318,6 +344,10 @@ window.addEventListener('message', function (event) {
 }, false);
 export const spec = {
   code: BIDDER_CODE,
+  gvlid: GVLID,
+  aliases: [
+    { code: 'duration', gvlid: 674 }
+  ],
   supportedMediaTypes: [BANNER, VIDEO],
   /**
  * Determines whether or not the given bid request is valid.
@@ -338,7 +368,7 @@ export const spec = {
   buildRequests: function(validBidRequests, bidderRequest) {
     function resolveEndpoint() {
       var ret = 'https://ads.servenobid.com/';
-      var env = (typeof utils.getParameterByName === 'function') && (utils.getParameterByName('nobid-env'));
+      var env = (typeof getParameterByName === 'function') && (getParameterByName('nobid-env'));
       if (!env) ret = 'https://ads.servenobid.com/';
       else if (env == 'beta') ret = 'https://beta.servenobid.com/';
       else if (env == 'dev') ret = '//localhost:8282/';
@@ -358,11 +388,18 @@ export const spec = {
     window.nobid.refreshCount++;
     const payloadString = JSON.stringify(payload).replace(/'|&|#/g, '')
     const endpoint = buildEndpoint();
+
+    let options = {};
+    if (!hasPurpose1Consent(bidderRequest?.gdprConsent)) {
+      options = { withCredentials: false };
+    }
+
     return {
       method: 'POST',
       url: endpoint,
       data: payloadString,
-      bidderRequest
+      bidderRequest,
+      options
     };
   },
   /**
@@ -412,11 +449,11 @@ export const spec = {
             type: 'image',
             url: element
           });
-        })
+        });
       }
       return syncs;
     } else {
-      utils.logWarn('-NoBid- Please enable iframe based user sync.', syncOptions);
+      logWarn('-NoBid- Please enable iframe based user sync.', syncOptions);
       return [];
     }
   },

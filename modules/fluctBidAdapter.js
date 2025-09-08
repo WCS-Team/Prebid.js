@@ -1,4 +1,5 @@
-import * as utils from '../src/utils.js';
+import { _each, deepSetValue, isEmpty } from '../src/utils.js';
+import { config } from '../src/config.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 
 const BIDDER_CODE = 'fluct';
@@ -6,6 +7,16 @@ const END_POINT = 'https://hb.adingo.jp/prebid';
 const VERSION = '1.2';
 const NET_REVENUE = true;
 const TTL = 300;
+
+/**
+ * See modules/userId/eids.js for supported sources
+ */
+const SUPPORTED_USER_ID_SOURCES = [
+  'adserver.org',
+  'criteo.com',
+  'intimatemerger.com',
+  'liveramp.com',
+];
 
 export const spec = {
   code: BIDDER_CODE,
@@ -29,18 +40,36 @@ export const spec = {
    */
   buildRequests: (validBidRequests, bidderRequest) => {
     const serverRequests = [];
-    const referer = bidderRequest.refererInfo.referer;
+    const page = bidderRequest.refererInfo.page;
 
-    utils._each(validBidRequests, (request) => {
+    _each(validBidRequests, (request) => {
       const data = Object();
 
-      data.referer = referer;
+      data.page = page;
       data.adUnitCode = request.adUnitCode;
       data.bidId = request.bidId;
-      data.transactionId = request.transactionId;
+      data.transactionId = request.ortb2Imp?.ext?.tid;
+      data.user = {
+        eids: (request.userIdAsEids || []).filter((eid) => SUPPORTED_USER_ID_SOURCES.indexOf(eid.source) !== -1)
+      };
+
+      if (bidderRequest.gdprConsent) {
+        deepSetValue(data, 'regs.gdpr', {
+          consent: bidderRequest.gdprConsent.consentString,
+          gdprApplies: bidderRequest.gdprConsent.gdprApplies ? 1 : 0,
+        });
+      }
+      if (bidderRequest.uspConsent) {
+        deepSetValue(data, 'regs.us_privacy', {
+          consent: bidderRequest.uspConsent,
+        });
+      }
+      if (config.getConfig('coppa') === true) {
+        deepSetValue(data, 'regs.coppa', 1);
+      }
 
       data.sizes = [];
-      utils._each(request.sizes, (size) => {
+      _each(request.sizes, (size) => {
         data.sizes.push({
           w: size[0],
           h: size[1]
@@ -49,9 +78,19 @@ export const spec = {
 
       data.params = request.params;
 
+      if (request.schain) {
+        data.schain = request.schain;
+      }
+
+      const searchParams = new URLSearchParams({
+        dfpUnitCode: request.params.dfpUnitCode,
+        tagId: request.params.tagId,
+        groupId: request.params.groupId,
+      });
+
       serverRequests.push({
         method: 'POST',
-        url: END_POINT,
+        url: END_POINT + '?' + searchParams.toString(),
         options: {
           contentType: 'application/json',
           withCredentials: true,
@@ -78,7 +117,7 @@ export const spec = {
     const bidResponses = [];
 
     const res = serverResponse.body;
-    if (!utils.isEmpty(res) && !utils.isEmpty(res.seatbid) && !utils.isEmpty(res.seatbid[0].bid)) {
+    if (!isEmpty(res) && !isEmpty(res.seatbid) && !isEmpty(res.seatbid[0].bid)) {
       const bid = res.seatbid[0].bid[0];
       const dealId = bid.dealid;
       const beaconUrl = bid.burl;
@@ -86,7 +125,6 @@ export const spec = {
         `(function() { var img = new Image(); img.src = "${beaconUrl}"})()` +
         `</script>`;
       let data = {
-        bidderCode: BIDDER_CODE,
         requestId: res.id,
         currency: res.cur,
         cpm: parseFloat(bid.price) || 0,
@@ -96,8 +134,11 @@ export const spec = {
         creativeId: bid.crid,
         ttl: TTL,
         ad: bid.adm + callImpBeacon,
+        meta: {
+          advertiserDomains: bid.adomain || [],
+        },
       };
-      if (!utils.isEmpty(dealId)) {
+      if (!isEmpty(dealId)) {
         data.dealId = dealId;
       }
       bidResponses.push(data);
@@ -114,8 +155,22 @@ export const spec = {
    *
    */
   getUserSyncs: (syncOptions, serverResponses) => {
-    return [];
-  },
+    // gdpr, us_privacy, and coppa params to be handled on the server end.
+    const usersyncs = serverResponses.reduce((acc, serverResponse) => [
+      ...acc,
+      ...(serverResponse.body.usersyncs ?? []),
+    ], []);
+    const syncs = usersyncs.filter(
+      (sync) => (
+        (sync['type'] === 'image' && syncOptions.pixelEnabled) ||
+        (sync['type'] === 'iframe' && syncOptions.iframeEnabled)
+      )
+    ).map((sync) => ({
+      type: sync.type,
+      url: sync.url,
+    }));
+    return syncs;
+  }
 };
 
 registerBidder(spec);
