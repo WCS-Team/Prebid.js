@@ -162,7 +162,7 @@
           "S3Bucket": {
             "Ref": "ServerlessDeploymentBucket"
           },
-          "S3Key": "serverless/prebidjs-builder/stage/1757374919428-2025-09-08T23:41:59.428Z/prebidjs-builder.zip"
+          "S3Key": "serverless/prebidjs-builder/stage/1757408075517-2025-09-09T08:54:35.517Z/prebidjs-builder.zip"
         },
         "Handler": "handler.build",
         "Runtime": "nodejs22.x",
@@ -181,14 +181,14 @@
         "BuildLogGroup"
       ]
     },
-    "BuildLambdaVersionRnOQuDINlTXEOFEgfpQ0IA9DqxQq7FUBxdFcr3Lo": {
+    "BuildLambdaVersionq6XhaQ7pPrZEoPznkzF9kmNMm189y29IqTWjeKMJbY": {
       "Type": "AWS::Lambda::Version",
       "DeletionPolicy": "Retain",
       "Properties": {
         "FunctionName": {
           "Ref": "BuildLambdaFunction"
         },
-        "CodeSha256": "OJvc5DTEVMmfjrw+184CCnbbdgPZ3ZY96J3+42mmtKI=",
+        "CodeSha256": "UPWNF+E2g00o/8if/dmo4HvOc5Cl6GagQIbOBFKl45E=",
         "Description": "Build prebid script based on provided modules."
       }
     },
@@ -265,7 +265,7 @@
         "BuildLambdaPermissionApiGateway"
       ]
     },
-    "ApiGatewayDeployment1757374839739": {
+    "ApiGatewayDeployment1757407948386": {
       "Type": "AWS::ApiGateway::Deployment",
       "Properties": {
         "RestApiId": {
@@ -327,7 +327,7 @@
     "BuildLambdaFunctionQualifiedArn": {
       "Description": "Current Lambda function version",
       "Value": {
-        "Ref": "BuildLambdaVersionRnOQuDINlTXEOFEgfpQ0IA9DqxQq7FUBxdFcr3Lo"
+        "Ref": "BuildLambdaVersionq6XhaQ7pPrZEoPznkzF9kmNMm189y29IqTWjeKMJbY"
       },
       "Export": {
         "Name": "sls-prebidjs-builder-stage-BuildLambdaFunctionQualifiedArn"
